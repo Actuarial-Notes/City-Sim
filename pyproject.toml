@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "citysim"
+version = "0.1.0"
+description = "Environmental digital twin with Monte-Carlo extreme-weather impact simulation (flood-first)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.23",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "httpx>=0.24"]
+# Optional real-data / high-fidelity extras (not required for the demo pipeline)
+geo = ["requests"]
+
+[tool.setuptools.packages.find]
+include = ["citysim*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
