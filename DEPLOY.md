@@ -29,9 +29,12 @@ solver, publish.
   you can override the run count, how many runs get 3D replay frames, and
   which presets to bake.
 
-The first run also enables Pages on the repo (`actions/configure-pages` with
-`enablement: true`). If your org blocks that, enable it by hand once —
-Settings → Pages → Source: **GitHub Actions** — and re-run.
+**One-time setup:** enable Pages on the repo — Settings → Pages → Source:
+**GitHub Actions**. The workflow cannot do this for you: `GITHUB_TOKEN` can
+deploy to an existing Pages site, but creating one needs admin rights it does
+not have (`Create Pages site failed. Error: Resource not accessible by
+integration`). The workflow checks for Pages *before* it runs the solver, so if
+this step is missed the run fails in seconds rather than after the bake.
 
 Published at `https://<owner>.github.io/City-Sim/`. Roughly 10–20 minutes of CI
 for the default four presets × 96 runs; the site is ~30 MB, of which a visitor
