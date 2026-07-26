@@ -8,7 +8,19 @@ are designed so other hazards (wind, heat, ice storm, snow load) plug in later.
 Reference geography: **Hamilton, Ontario** — a flood-prone mix of separated *and*
 combined sewer systems below the Niagara Escarpment, with unusually good open data.
 
-## Quick start
+## Live demo
+
+**https://actuarial-notes.github.io/City-Sim/**
+
+A prebaked deployment: the flood solver runs in CI (`.github/workflows/
+pages.yml`), and the twin, four scenario ensembles and their 3D replays ship as
+static data — so the hosted demo is the real physics, it just can't launch
+*new* ensembles. Pick a scenario (present day, backwater valves, 2050 climate,
+2050 + valves), read the dashboard, then scrub a storm in the 3D viewer.
+
+To build twins for other places and run your own ensembles, run it yourself.
+
+## Running it yourself
 
 ```bash
 pip install -e ".[dev]"
@@ -16,7 +28,7 @@ pip install -e ".[dev]"
 # CLI demo: twin → Monte-Carlo flood ensemble → $ distribution → mitigation delta
 python scripts/demo.py --runs 48
 
-# The web application
+# The web application (full interactive version)
 uvicorn citysim.server.app:app --port 8000
 # then open http://localhost:8000
 ```
@@ -28,7 +40,12 @@ scrub any storm through time, watch manholes surcharge, colour buildings by
 mean $ risk, x-ray the sewer network, and click any building for its personal
 damage distribution across all runs.
 
-Tests: `python -m pytest` (30 tests: physics, calibration, determinism, API).
+Or run the container: `docker build -t citysim . && docker run -p 8000:8000
+citysim`. Deploying either version — Pages, Fly.io, Render — is
+[DEPLOY.md](DEPLOY.md).
+
+Tests: `python -m pytest` (36 tests: physics, calibration, determinism, API,
+static export).
 
 ## Three tiers
 
@@ -37,7 +54,10 @@ The central design decision — three tiers, kept strictly separate:
 ```
 TIER 1  Web app         FastAPI + job queue + SPA + WebGL 3D replay viewer
         (interface)     knows nothing about any specific hazard: the hazard
-                        picker, dashboards and viewer are driven by the registry
+                        picker, dashboards and viewer are driven by the
+                        registry. The SPA talks to a backend interface
+                        (static/api.js), so the same front end runs against
+                        the live API or a prebaked static export.
 ─────────────────────────────────────────────────────────────────────────────
 TIER 2  Twin core       citysim/twin — terrain (DTM), buildings (footprint,
         (hazard-        height, material, age, value), sewer/storm network,
@@ -130,6 +150,10 @@ PySWMM (drop-in behind `Sewer1D`'s interface) and GPU SynxFlow (behind
 | `GET /api/results/{job}/buildings/{id}` | one building's loss distribution |
 | `GET /api/results/{job}/runs/{n}/frames` | binary replay frames |
 
+The static export mirrors these payloads as flat files — same JSON shapes, same
+binary frame format — so the front end has one decode path for both
+deployments. See [DEPLOY.md](DEPLOY.md).
+
 ## Adding the next hazard
 
 1. Implement `HazardModule` (`sample_scenarios` / `simulate` / `assess_impact`)
@@ -153,3 +177,7 @@ own vulnerability interpretation.
   not lot scale).
 - Household aggregation reports the residential mean per household;
   multi-unit buildings split losses evenly across units.
+- The hosted demo is prebaked. Its numbers come from the real solver, but the
+  scenarios and the runs you can replay are the ones baked at build time —
+  arbitrary places, ensemble sizes and mitigation combinations need the full
+  app.

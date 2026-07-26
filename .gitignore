@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 data/
 .venv/
+# static export output (built by CI, never committed)
+site/

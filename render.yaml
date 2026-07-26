@@ -1,0 +1,21 @@
+# Render blueprint for the full interactive CitySim.
+# Point Render at this repo ("New → Blueprint") and it builds the Dockerfile.
+#
+# The free plan has no persistent disk and sleeps after inactivity: twins and
+# results are rebuilt on demand, which costs a twin build on the first request
+# after a sleep. Move to `plan: starter` and uncomment the disk to keep them.
+services:
+  - type: web
+    name: citysim
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: ohio
+    healthCheckPath: /api/hazards
+    envVars:
+      - key: CITYSIM_DATA_DIR
+        value: /data
+    # disk:
+    #   name: citysim-data
+    #   mountPath: /data
+    #   sizeGB: 1

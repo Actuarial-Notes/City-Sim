@@ -1,0 +1,38 @@
+# Fly.io deployment for the full interactive CitySim.
+#
+#   fly launch --no-deploy --copy-config    # claims the app name
+#   fly volumes create citysim_data --size 1
+#   fly deploy
+#
+# Ensembles are CPU-bound: the 2-CPU/1 GB machine below runs a 96-run flood
+# batch in roughly a minute. Bump [[vm]] for faster ensembles.
+app = "citysim"
+primary_region = "yyz"          # Toronto — closest to the Hamilton twin
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8000"
+  CITYSIM_DATA_DIR = "/data"
+
+[[mounts]]
+  source = "citysim_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # keep one machine warm: a cold start would stall an in-flight ensemble
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 20
+    hard_limit = 40
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "1gb"

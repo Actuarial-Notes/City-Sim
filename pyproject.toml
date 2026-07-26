@@ -22,5 +22,10 @@ geo = ["requests"]
 [tool.setuptools.packages.find]
 include = ["citysim*"]
 
+# the SPA is part of the distribution — without this a non-editable install
+# (`pip install .`, the Dockerfile) serves the API with no front end
+[tool.setuptools.package-data]
+"citysim.server" = ["static/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

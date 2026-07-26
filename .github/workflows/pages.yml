@@ -1,0 +1,77 @@
+name: Deploy demo to GitHub Pages
+
+# GitHub Pages cannot run Python, so the solver runs here: this job builds the
+# twin, runs a Monte-Carlo ensemble per scenario preset, and publishes the
+# results as a static site. The deployed demo is the real physics — it just
+# cannot launch new ensembles (see DEPLOY.md for the full interactive app).
+
+on:
+  push:
+    branches: [claude/plan-implementation-o1ogf1]   # repo default branch
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "Monte-Carlo runs per scenario preset"
+        default: "96"
+      frame_runs:
+        description: "worst-loss runs to bake 3D replay frames for, per preset"
+        default: "8"
+      presets:
+        description: "comma-separated preset ids (blank = all four)"
+        default: ""
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# never let two deploys race; let a running build finish first
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install CitySim
+        run: pip install -e ".[dev]"
+
+      - name: Test
+        run: python -m pytest -q
+
+      - name: Bake the ensembles (runs the flood solver)
+        run: |
+          python scripts/export_static.py \
+            --out site \
+            --runs "${{ inputs.runs || '96' }}" \
+            --frame-runs "${{ inputs.frame_runs || '8' }}" \
+            --presets "${{ inputs.presets }}" \
+            --workers "$(nproc)"
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true       # turns Pages on the first time this runs
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
