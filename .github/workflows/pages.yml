@@ -38,6 +38,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # first, before the solver spends 20+ minutes: if Pages is not enabled on
+      # the repo this fails in seconds instead of after the bake. Enabling it
+      # needs admin rights the workflow token does not have, so the one-time
+      # setup is Settings → Pages → Source: GitHub Actions.
+      - uses: actions/configure-pages@v5
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -57,10 +63,6 @@ jobs:
             --frame-runs "${{ inputs.frame_runs || '8' }}" \
             --presets "${{ inputs.presets }}" \
             --workers "$(nproc)"
-
-      - uses: actions/configure-pages@v5
-        with:
-          enablement: true       # turns Pages on the first time this runs
 
       - uses: actions/upload-pages-artifact@v3
         with:
