@@ -4,6 +4,7 @@ payload shapes the live endpoints return."""
 
 import gzip
 import json
+import re
 import struct
 import subprocess
 import sys
@@ -32,9 +33,39 @@ def test_front_end_is_copied_and_switched_to_static_mode(site):
     assert "<!--CITYSIM_STATIC_CONFIG-->" not in html    # placeholder consumed
     # relative script paths — the site is served from a project subpath
     assert 'src="static/app.js"' in html
-    for name in ("app.js", "api.js", "viewer.js"):
-        assert (site / "static" / name).exists()
     assert (site / ".nojekyll").exists()
+
+
+def test_every_script_the_page_references_was_copied(site):
+    """The deploy 404s silently if a script is added to index.html and not here.
+
+    The exporter derives the list from the markup for exactly this reason; this
+    checks the derivation from the other side.
+    """
+    html = (site / "index.html").read_text()
+    referenced = re.findall(r'<script src="static/([^"]+)"', html)
+    assert len(referenced) >= 5, referenced
+    missing = [n for n in referenced if not (site / "static" / n).exists()]
+    assert not missing, f"index.html references files the export did not copy: {missing}"
+    # and nothing stale was copied that the page does not load
+    copied = {p.name for p in (site / "static").iterdir()}
+    assert copied == set(referenced)
+
+
+def test_assumption_specs_are_baked_for_the_setup_tabs(site):
+    """A prebaked deploy cannot re-run the solver, but it must still be able to
+    show every curve, table and citation."""
+    spec = json.loads((site / "data" / "assumptions.json").read_text())
+    assert spec["knobs"] and spec["sources"] and spec["limitations"]
+    assert len(spec["curves"]["depth_damage"]["series"]) == 5
+    tp = json.loads((site / "data" / "twin_params.json").read_text())
+    assert tp["params"] and tp["groups"]
+
+    used = json.loads((site / "data" / "valves" / "assumptions.json").read_text())
+    assert used["resolved"]["backwater_valves"] is True
+    assert "backwater_valves" in {d["id"] for d in used["deviations"]}
+    baseline = json.loads((site / "data" / "present" / "assumptions.json").read_text())
+    assert baseline["deviations"] == []
 
 
 def test_manifest_describes_every_baked_preset(site):

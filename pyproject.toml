@@ -26,6 +26,8 @@ include = ["citysim*"]
 # (`pip install .`, the Dockerfile) serves the API with no front end
 [tool.setuptools.package-data]
 "citysim.server" = ["static/*"]
+# the baked Hamilton extract, when scripts/bake_hamilton.py has produced one
+"citysim.twin.data" = ["*.json.gz"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

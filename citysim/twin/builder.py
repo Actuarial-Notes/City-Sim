@@ -18,25 +18,51 @@ import hashlib
 
 import numpy as np
 
+from . import params as twin_params
 from .schema import Building, Twin
-from .synthetic import generate_synthetic_twin, _sample_material, _poly_area
+from .synthetic import (
+    generate_synthetic_twin, _sample_material, _poly_area, replacement_costs,
+    landcover_from_classes,
+)
 from . import connectors
 
+MODES = ("hamilton", "synthetic", "auto")
 
-def build_twin(place: str = "Hamilton demo (lower city)", mode: str = "synthetic",
-               nx: int = 150, ny: int = 110, cell_size: float = 6.0) -> Twin:
-    twin = generate_synthetic_twin(name=place, nx=nx, ny=ny, cell_size=cell_size)
+
+def build_twin(place: str = "Hamilton (lower city)", mode: str = "hamilton",
+               nx: int | None = None, ny: int | None = None,
+               cell_size: float | None = None, params: dict | None = None) -> Twin:
+    """Place name → digital twin.
+
+    ``params`` is a twin-parameter override dict (``citysim.twin.params``); it is
+    resolved and clamped by the generators, and folded into the twin id.
+    """
+    p = twin_params.resolve(params)
+
+    if mode == "hamilton":
+        from .hamilton import build_hamilton_twin
+        twin = build_hamilton_twin(place=place, params=p, nx=nx, ny=ny,
+                                   cell_size=cell_size)
+        if twin is not None:
+            return twin
+        # the baked extract is missing or unreadable — fall through rather than
+        # dead-end, the same way the OSM path degrades
+        mode = "synthetic"
+
+    twin = generate_synthetic_twin(name=place, nx=nx, ny=ny, cell_size=cell_size,
+                                   params=p)
 
     if mode == "auto":
-        hybrid = _try_osm_overlay(twin, place)
+        hybrid = _try_osm_overlay(twin, place, p)
         if hybrid is not None:
             return hybrid
         twin.sources.append("live OSM fetch failed or empty — using procedural fallback")
     return twin
 
 
-def _try_osm_overlay(twin: Twin, place: str) -> Twin | None:
+def _try_osm_overlay(twin: Twin, place: str, p: dict | None = None) -> Twin | None:
     """Replace procedural buildings with real OSM footprints when reachable."""
+    p = p or twin_params.DEFAULTS
     geo = connectors.geocode(place)
     if geo is None:
         return None
@@ -79,21 +105,28 @@ def _try_osm_overlay(twin: Twin, place: str) -> Twin | None:
             height = 0.0
         height = height or storeys * 3.0 + 1.0
         year = int(rng.integers(1900, 2015))
-        basement = use == "residential" and rng.random() < 0.85
+        basement_rate = (p["basement_rate_pre1990"] if year < 1990
+                         else p["basement_rate_post1990"])
+        basement = use == "residential" and rng.random() < basement_rate
         b = Building(
             id=f"b{i}", footprint=fp, centroid=(cx, cy), height=height,
             storeys=storeys, year_built=year, use=use,
-            material=_sample_material(rng, year),
+            material=_sample_material(rng, year, p),
             foundation="basement" if basement else "slab",
-            basement_depth=float(rng.uniform(1.8, 2.4)) if basement else 0.0,
+            basement_depth=float(rng.uniform(p["basement_depth_min"],
+                                             p["basement_depth_max"])) if basement else 0.0,
             ground_elev=twin.terrain.elevation_at(cx, cy),
-            first_floor_height=float(rng.uniform(0.15, 0.6)),
+            first_floor_height=float(rng.uniform(p["first_floor_height_min"],
+                                                 p["first_floor_height_max"])),
             dwelling_units=1 if use == "residential" else 0,
         )
-        from .synthetic import _REPLACEMENT_COST_PER_M2
-        b.structure_value = round(area * max(storeys, 1)
-                                  * _REPLACEMENT_COST_PER_M2[use] * rng.uniform(0.85, 1.15), -2)
-        b.contents_value = round(b.structure_value * 0.35, -2)
+        costs = replacement_costs(p)
+        disp = p["value_dispersion"]
+        b.structure_value = round(area * max(storeys, 1) * costs[use]
+                                  * rng.uniform(1.0 - disp, 1.0 + disp), -2)
+        ratio = (p["contents_ratio_residential"] if use == "residential"
+                 else p["contents_ratio_other"])
+        b.contents_value = round(b.structure_value * ratio, -2)
         buildings.append(b)
 
     if len(buildings) < 10:
@@ -108,7 +141,9 @@ def _try_osm_overlay(twin: Twin, place: str) -> Twin | None:
         "OpenStreetMap footprints via Overpass API (ODbL)",
         "procedural terrain/sewer/landcover (LiDAR + sewer connectors not active in this runtime)",
     ]
-    twin.id = f"twin-{hashlib.sha256(('osm:' + place).encode()).hexdigest()[:10]}"
+    twin.params = p
+    fp_hash = twin_params.fingerprint(p)
+    twin.id = f"twin-{hashlib.sha256(('osm:' + place + fp_hash).encode()).hexdigest()[:10]}"
     return twin
 
 
@@ -131,11 +166,14 @@ def _restamp_building_cells(twin: Twin) -> None:
     ny, nx = twin.terrain.shape
     lc.classes[lc.classes == 2] = 3
     for b in twin.buildings:
-        xs = [p[0] for p in b.footprint]
-        ys = [p[1] for p in b.footprint]
+        xs = [pt[0] for pt in b.footprint]
+        ys = [pt[1] for pt in b.footprint]
         j0, j1 = int(min(xs) / cell), int(np.ceil(max(xs) / cell))
         i0, i1 = int(min(ys) / cell), int(np.ceil(max(ys) / cell))
         lc.classes[max(i0, 0):min(i1, ny), max(j0, 0):min(j1, nx)] = 2
-    lc.manning_n = np.choose(lc.classes, [0.03, 0.013, 0.02, 0.05, 0.10, 0.035]).astype(np.float32)
-    lc.imperviousness = np.choose(lc.classes, [1.0, 0.95, 0.98, 0.05, 0.02, 0.15]).astype(np.float32)
-    lc.infiltration = np.choose(lc.classes, [0.0, 0.5, 0.0, 9.0, 14.0, 6.0]).astype(np.float32)
+    # one shared lookup (flood.assumptions) instead of a second copy that could
+    # drift away from the synthetic path's
+    fresh = landcover_from_classes(lc.classes)
+    lc.manning_n = fresh.manning_n
+    lc.imperviousness = fresh.imperviousness
+    lc.infiltration = fresh.infiltration

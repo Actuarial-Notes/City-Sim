@@ -17,15 +17,21 @@ import numpy as np
 
 from citysim.twin.schema import SewerNetwork
 
+# Defaults mirrored from flood/assumptions.py (the single source of truth) so
+# the class remains usable standalone.
 CHAMBER_AREA = 1.5      # m², effective manhole chamber storage area
 DWF_PER_NODE = 0.0008   # m³/s dry-weather flow entering each combined node
 
 
 class Sewer1D:
-    def __init__(self, network: SewerNetwork, blockage_factor: float = 1.0):
+    def __init__(self, network: SewerNetwork, blockage_factor: float = 1.0,
+                 chamber_area: float = CHAMBER_AREA,
+                 dwf_per_node: float = DWF_PER_NODE):
         """blockage_factor < 1 derates pipe capacity (Monte-Carlo uncertainty
         on sediment/blockage/aging — plan §5.7)."""
         self.net = network
+        self.chamber_area = float(chamber_area)
+        self.dwf_per_node = float(dwf_per_node)
         nodes = network.nodes
         self.node_ids = [n.id for n in nodes]
         self.idx = {nid: k for k, nid in enumerate(self.node_ids)}
@@ -34,7 +40,7 @@ class Sewer1D:
         self.max_inflow = np.array([n.max_inflow for n in nodes])
         self.is_outfall = np.array([n.kind == "outfall" for n in nodes])
         self.is_combined = np.array([n.system == "combined" for n in nodes])
-        self.capacity = np.maximum(self.rim - self.invert, 0.5) * CHAMBER_AREA
+        self.capacity = np.maximum(self.rim - self.invert, 0.5) * self.chamber_area
         self.storage = np.zeros(len(nodes))
         self.max_head = self.invert.copy()
 
@@ -57,7 +63,7 @@ class Sewer1D:
 
     def head(self) -> np.ndarray:
         """Hydraulic grade line estimate per node."""
-        return self.invert + self.storage / CHAMBER_AREA
+        return self.invert + self.storage / self.chamber_area
 
     def step(self, dt: float, inflow: np.ndarray) -> np.ndarray:
         """Advance one step.
@@ -66,7 +72,7 @@ class Sewer1D:
         returns : surcharge volume (m³) per node pushed back to the surface.
         """
         self.storage += inflow * dt
-        self.storage[self.is_combined] += DWF_PER_NODE * dt
+        self.storage[self.is_combined] += self.dwf_per_node * dt
 
         # route downstream, upstream nodes first
         for ni in self.order:

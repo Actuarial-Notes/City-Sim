@@ -11,263 +11,492 @@
     --page: #0d0d0d;
     --surface: #1a1a19;
     --surface-2: #222221;
+    --surface-3: #2a2a28;
     --ink: #ffffff;
     --ink-2: #c3c2b7;
     --muted: #898781;
     --grid: #2c2c2a;
     --baseline: #383835;
     --border: rgba(255,255,255,0.10);
-    --series-1: #3987e5;      /* categorical slot 1 (dark) */
-    --series-2: #d95926;      /* categorical slot 2 (dark) */
     --accent: #3987e5;
+    --accent-2: #d95926;
     --good: #0ca30c;
+    --warn: #d5a029;
     --critical: #d03b3b;
-    --seq-100:#cde2fb; --seq-250:#86b6ef; --seq-400:#3987e5;
-    --seq-550:#1c5cab; --seq-700:#0d366b;
   }
   * { box-sizing: border-box; margin: 0; }
   html, body { height: 100%; }
   body {
     background: var(--page); color: var(--ink);
     font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-    display: flex; flex-direction: column;
+    display: flex; flex-direction: column; overflow: hidden;
   }
+  a { color: var(--accent); }
+  .muted { color: var(--muted); font-size: 12px; }
+  .bad { color: var(--critical); }
+  .warn { color: var(--warn); }
+
+  /* ---------------- header + stepper ---------------- */
   header {
-    display: flex; align-items: baseline; gap: 14px;
-    padding: 10px 18px; border-bottom: 1px solid var(--border);
-    background: var(--surface);
+    display: flex; align-items: center; gap: 16px;
+    padding: 9px 18px; border-bottom: 1px solid var(--border);
+    background: var(--surface); flex: none;
   }
-  header h1 { font-size: 16px; font-weight: 650; letter-spacing: .2px; }
+  header h1 { font-size: 15px; font-weight: 650; letter-spacing: .2px; }
   header .sub { color: var(--muted); font-size: 12px; }
-  header nav { margin-left: auto; display: flex; gap: 4px; }
-  header nav button {
-    background: none; border: 1px solid transparent; color: var(--ink-2);
-    padding: 5px 12px; border-radius: 7px; cursor: pointer; font: inherit; font-size: 13px;
-  }
-  header nav button.active { background: var(--surface-2); color: var(--ink); border-color: var(--border); }
-  header nav button:disabled { opacity: .35; cursor: default; }
+  @media (max-width: 900px) { header .sub { display: none; } }
 
-  main { flex: 1; overflow: auto; }
+  #stepper { margin-left: auto; display: flex; gap: 6px; }
+  #stepper .step {
+    display: flex; align-items: center; gap: 8px; background: none;
+    border: 1px solid transparent; color: var(--muted);
+    padding: 5px 12px 5px 8px; border-radius: 8px; cursor: pointer;
+    font: inherit; font-size: 13px;
+  }
+  #stepper .step i {
+    width: 20px; height: 20px; border-radius: 50%; display: grid;
+    place-items: center; font-size: 11px; font-style: normal;
+    background: var(--surface-3); color: var(--ink-2);
+  }
+  #stepper .step.done i { background: var(--good); color: #fff; }
+  #stepper .step.active { background: var(--surface-2); color: var(--ink); border-color: var(--border); }
+  #stepper .step.active i { background: var(--accent); color: #fff; }
+  #stepper .step:disabled { opacity: .35; cursor: default; }
+
+  main { flex: 1; min-height: 0; position: relative; }
   .screen { display: none; height: 100%; }
-  .screen.active { display: block; }
+  .screen.active { display: flex; }
 
-  /* ---------- setup screen ---------- */
-  #screen-setup { display: none; }
-  #screen-setup.active { display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; }
-  .setup-card {
-    width: 620px; max-width: 100%; background: var(--surface);
-    border: 1px solid var(--border); border-radius: 14px; padding: 26px 28px;
+  /* ---------------- setup ---------------- */
+  #screen-setup { flex-direction: column; }
+  .setup-top {
+    display: flex; align-items: center; gap: 14px; padding: 12px 20px;
+    border-bottom: 1px solid var(--border); background: var(--surface); flex: none;
   }
-  .setup-card h2 { font-size: 18px; margin-bottom: 4px; }
-  .setup-card p.lead { color: var(--ink-2); font-size: 13px; margin-bottom: 20px; }
-  .field { margin-bottom: 16px; }
+  .setup-top h2 { font-size: 15px; font-weight: 620; }
+  .setup-top p { color: var(--muted); font-size: 12.5px; }
+  .setup-body { flex: 1; display: flex; min-height: 0; }
+  #setup-tabs {
+    width: 210px; flex: none; border-right: 1px solid var(--border);
+    background: var(--surface); overflow-y: auto; padding: 8px;
+  }
+  @media (max-width: 820px) {
+    #setup-tabs { width: 100%; display: flex; overflow-x: auto; border-right: none;
+                  border-bottom: 1px solid var(--border); }
+    .setup-body { flex-direction: column; }
+    #setup-tabs .tab span { display: none; }
+  }
+  #setup-tabs .tab {
+    display: block; width: 100%; text-align: left; background: none;
+    border: 1px solid transparent; border-radius: 9px; padding: 8px 11px;
+    cursor: pointer; font: inherit; color: var(--ink-2); margin-bottom: 2px;
+    white-space: nowrap;
+  }
+  #setup-tabs .tab b { display: block; font-size: 13px; font-weight: 600; }
+  #setup-tabs .tab span { display: block; font-size: 11px; color: var(--muted); }
+  #setup-tabs .tab:hover { background: var(--surface-2); }
+  #setup-tabs .tab.active { background: var(--surface-2); color: var(--ink);
+                            border-color: var(--border); }
+  #setup-panel { flex: 1; overflow-y: auto; padding: 20px 24px 60px; }
+
+  .setup-section { max-width: 940px; margin-bottom: 30px; }
+  .setup-section h3 { font-size: 15px; font-weight: 620; margin-bottom: 4px; }
+  .setup-section .blurb { color: var(--ink-2); font-size: 12.5px; margin-bottom: 14px;
+                          max-width: 68ch; }
+  .setup-section.advanced { opacity: .82; }
+
+  .field { margin-bottom: 14px; max-width: 520px; }
   .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
-  .field input[type=text], .field select {
+  .field input[type=text], .field input[type=number], .field select {
     width: 100%; background: var(--page); color: var(--ink);
-    border: 1px solid var(--baseline); border-radius: 8px; padding: 9px 11px; font: inherit;
+    border: 1px solid var(--baseline); border-radius: 8px; padding: 8px 11px; font: inherit;
   }
-  .row { display: flex; gap: 14px; }
-  .row .field { flex: 1; }
+  .field input:disabled, .field select:disabled { opacity: .55; cursor: not-allowed; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .row .field { flex: 1; min-width: 180px; }
+
+  /* knob grid */
+  .knob-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+               gap: 12px; margin-bottom: 18px; }
+  .knob { background: var(--surface); border: 1px solid var(--border);
+          border-radius: 11px; padding: 11px 13px; position: relative; }
+  .knob.readonly { background: transparent; border-style: dashed; }
+  .knob-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 7px; }
+  .knob-head label { font-size: 12.5px; font-weight: 560; color: var(--ink); }
+  .knob-head .val { margin-left: auto; font-variant-numeric: tabular-nums;
+                    font-size: 12.5px; color: var(--ink-2); }
+  .knob-head .val.changed { color: var(--accent); font-weight: 640; }
+  .knob-head .reset { background: none; border: none; color: var(--muted);
+                      cursor: pointer; font-size: 13px; padding: 0 2px; line-height: 1; }
+  .knob-head .reset:hover { color: var(--ink); }
+  .knob-input { display: flex; align-items: center; gap: 8px; }
+  .knob-input input[type=range] { flex: 1; accent-color: var(--accent); min-width: 0; }
+  .knob-input .num { width: 78px; background: var(--page); color: var(--ink);
+                     border: 1px solid var(--baseline); border-radius: 6px;
+                     padding: 3px 6px; font: inherit; font-size: 12px;
+                     font-variant-numeric: tabular-nums; }
+  .knob-input .unit { font-size: 11px; color: var(--muted); min-width: 26px; }
+  .knob-meta p { font-size: 11.5px; color: var(--muted); margin-top: 7px; line-height: 1.4; }
+  .knob-meta .affects { font-size: 11px; color: var(--ink-2); margin-top: 4px; }
+  .knob-meta .src { font-size: 10.5px; color: var(--muted); margin-top: 5px;
+                    padding-top: 5px; border-top: 1px solid var(--grid); }
+  .knob-meta .src .fid { margin-left: 6px; opacity: .8; font-style: italic; }
+  .preset-row { display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap; }
+  .mini { background: var(--surface-2); border: 1px solid var(--border);
+          color: var(--ink-2); border-radius: 999px; padding: 3px 10px;
+          font: inherit; font-size: 11px; cursor: pointer; }
+  .mini:hover { color: var(--ink); border-color: var(--accent); }
+  .switch { display: inline-flex; align-items: center; cursor: pointer; }
+  .switch input { position: absolute; opacity: 0; }
+  .switch i { width: 36px; height: 20px; border-radius: 999px; background: var(--surface-3);
+              position: relative; transition: background .15s; }
+  .switch i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px;
+                     height: 16px; border-radius: 50%; background: var(--ink-2);
+                     transition: transform .15s; }
+  .switch input:checked + i { background: var(--accent); }
+  .switch input:checked + i::after { transform: translateX(16px); background: #fff; }
+  .switch input:disabled + i { opacity: .5; }
+
+  /* visuals inside setup */
+  .viz { background: var(--surface); border: 1px solid var(--border);
+         border-radius: 12px; padding: 13px 15px; margin-bottom: 14px; }
+  .viz h4 { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+  .viz .note { font-size: 11.5px; color: var(--muted); margin-bottom: 8px; max-width: 70ch; }
+  .chart { width: 100%; height: auto; display: block; }
+  .chart.strip { max-width: 300px; }
+  .chart-legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px;
+                  font-size: 11px; color: var(--ink-2); }
+  .chart-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+                    margin-right: 5px; vertical-align: -1px; }
+  .empty { color: var(--muted); font-size: 12px; padding: 12px 0; }
+  .readout { background: var(--surface); border: 1px solid var(--border);
+             border-radius: 10px; padding: 11px 13px; font-size: 12.5px;
+             color: var(--ink-2); margin-bottom: 14px; }
+  .readout .warn { display: block; margin-top: 5px; font-size: 11.5px; }
+  .mini-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+                gap: 10px; margin: 12px 0 16px; }
+  .mini-tiles > div { background: var(--surface); border: 1px solid var(--border);
+                      border-radius: 10px; padding: 9px 11px; }
+  .mini-tiles span { display: block; font-size: 11px; color: var(--muted); }
+  .mini-tiles b { font-size: 14px; }
+  .strips { margin-bottom: 18px; }
+  .strip-row { display: flex; align-items: center; gap: 14px; margin-bottom: 4px; }
+  .strip-row > span { width: 170px; font-size: 12px; color: var(--ink-2); flex: none; }
+  .mech-list > div { border-left: 2px solid var(--accent); padding-left: 11px;
+                     margin-bottom: 11px; }
+  .mech-list b { font-size: 12.5px; }
+  .mech-list p { font-size: 11.5px; color: var(--muted); max-width: 72ch; }
+  .src-table, .dev-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .src-table th, .dev-table th { text-align: left; color: var(--muted); font-weight: 500;
+                                 padding: 6px 8px; border-bottom: 1px solid var(--grid); }
+  .src-table td, .dev-table td { padding: 9px 8px; border-bottom: 1px solid var(--grid);
+                                 color: var(--ink-2); vertical-align: top; }
+  .src-table td span { display: block; color: var(--muted); font-size: 11px; }
+  .src-table td p { color: var(--muted); font-size: 11px; margin-top: 4px; max-width: 52ch; }
+  .fid { display: inline-block; font-size: 10.5px; padding: 2px 7px; border-radius: 999px;
+         background: var(--surface-3); color: var(--ink-2); white-space: nowrap; }
+  .fid.implemented { background: rgba(12,163,12,.18); color: #6fd06f; }
+  .fid.approximated, .fid.surrogate { background: rgba(213,160,41,.18); color: #e0b552; }
+  .limits > div { margin-bottom: 12px; }
+  .limits b { font-size: 12.5px; }
+  .limits p { font-size: 11.5px; color: var(--muted); max-width: 74ch; }
+  ul.prov { margin: 8px 0 0 16px; font-size: 11.5px; color: var(--muted); }
+  .dev-table .was { color: var(--muted); text-decoration: line-through; }
+  .dev-table .now { color: var(--accent); font-weight: 620; }
+
   .hazards { display: flex; flex-wrap: wrap; gap: 8px; }
-  .hazard-chip {
-    padding: 7px 13px; border-radius: 999px; border: 1px solid var(--baseline);
-    color: var(--ink-2); cursor: pointer; font-size: 13px; background: none; font: inherit;
-  }
-  .hazard-chip.selected { border-color: var(--accent); color: var(--ink); background: rgba(57,135,229,0.12); }
+  .hazard-chip { padding: 6px 13px; border-radius: 999px; border: 1px solid var(--baseline);
+                 color: var(--ink-2); cursor: pointer; font: inherit; font-size: 12.5px;
+                 background: none; }
+  .hazard-chip.selected { border-color: var(--accent); color: var(--ink);
+                          background: rgba(57,135,229,0.12); }
   .hazard-chip:disabled { opacity: .38; cursor: default; }
-  .opts { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; color: var(--ink-2); font-size: 13px; }
-  .opts label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
-  .btn {
-    background: var(--accent); border: none; color: #fff; font: inherit; font-weight: 600;
-    padding: 10px 18px; border-radius: 9px; cursor: pointer;
-  }
+
+  .btn { background: var(--accent); border: none; color: #fff; font: inherit;
+         font-weight: 600; padding: 9px 18px; border-radius: 9px; cursor: pointer; }
   .btn:disabled { opacity: .45; cursor: default; }
   .btn.ghost { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--border); }
-  .progress-wrap { margin-top: 18px; display: none; }
-  .progress-wrap.visible { display: block; }
-  .progress-bar { height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
-  .progress-bar > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
-  .progress-msg { margin-top: 7px; color: var(--muted); font-size: 12px; }
-  .twin-summary { margin-top: 16px; font-size: 12.5px; color: var(--ink-2); display: none;
-    border-top: 1px solid var(--border); padding-top: 12px; }
-  .error-msg { color: var(--critical); font-size: 13px; margin-top: 10px; display: none; }
 
-  /* ---------- dashboard ---------- */
-  #screen-dash.active { display: block; padding: 20px 22px 40px; }
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
-  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px; }
+  .static-note, .twin-summary, .error-msg { display: none; }
+  .static-note.visible, .twin-summary.visible, .error-msg.visible { display: block; }
+  .static-note { background: rgba(57,135,229,0.10); border: 1px solid rgba(57,135,229,0.35);
+                 color: var(--ink-2); border-radius: 10px; padding: 10px 13px;
+                 font-size: 12.5px; margin: 0 24px 16px; }
+  .twin-summary { font-size: 12.5px; color: var(--ink-2); }
+  .error-msg { color: var(--critical); font-size: 13px; margin: 10px 24px; }
+  #field-presets { display: none; margin: 0 24px 14px; }
+  #field-presets.visible { display: block; }
+  .presets { display: flex; gap: 8px; flex-wrap: wrap; }
+  .preset-chip { text-align: left; background: var(--page); border: 1px solid var(--baseline);
+                 color: var(--ink-2); border-radius: 10px; padding: 8px 12px;
+                 cursor: pointer; font: inherit; }
+  .preset-chip b { display: block; color: var(--ink); font-size: 12.5px; font-weight: 600; }
+  .preset-chip span { font-size: 11.5px; color: var(--muted); }
+  .preset-chip.selected { border-color: var(--accent); background: rgba(57,135,229,0.12); }
+
+  /* ---------------- step 2: simulate + replay ---------------- */
+  #screen-sim { flex-direction: column; }
+  #sim-stage { display: none; flex: 1; align-items: center; justify-content: center; }
+  #sim-stage.running { display: flex; }
+  #sim-stage .inner { width: 460px; max-width: 92%; text-align: center; }
+  #sim-stage h2 { font-size: 17px; margin-bottom: 6px; }
+  .progress-bar { height: 8px; background: var(--surface-2); border-radius: 4px;
+                  overflow: hidden; margin-top: 18px; }
+  .progress-bar > div { height: 100%; width: 0; background: var(--accent);
+                        transition: width .3s; }
+  .progress-msg { margin-top: 8px; color: var(--ink-2); font-size: 12.5px; }
+  .progress-detail { color: var(--muted); font-size: 11.5px; margin-top: 3px; }
+
+  #viewer-stage { display: none; flex: 1; flex-direction: column; min-height: 0; }
+  #viewer-stage.ready { display: flex; }
+  #viewer-wrap { position: relative; flex: 1; min-height: 0; }
+  #gl { width: 100%; height: 100%; display: block; cursor: grab; outline: none; }
+  #gl.dragging { cursor: grabbing; }
+  #rain-canvas, #map-labels { position: absolute; inset: 0; pointer-events: none; }
+  .map-label {
+    position: absolute; transform-origin: 0 0; margin: -9px 0 0 10px;
+    font-size: 11px; color: rgba(255,255,255,.92); white-space: nowrap;
+    text-shadow: 0 1px 3px rgba(0,0,0,.95), 0 0 8px rgba(0,0,0,.7);
+    transition: opacity .18s; pointer-events: none;
+  }
+  .map-label.kind-water { color: #a8cbea; font-style: italic; }
+  .map-label.kind-landform { color: #d8c39c; letter-spacing: .09em; text-transform: uppercase; }
+  .map-label.kind-district { color: rgba(255,255,255,.75); letter-spacing: .12em;
+                             text-transform: uppercase; font-size: 10px; }
+  .map-label.kind-park { color: #a9c68c; }
+
+  .hud { position: absolute; top: 12px; left: 12px; display: flex; flex-direction: column;
+         gap: 8px; max-width: 320px; }
+  .hud .panel, #rain-meter .panel, #bldg-panel .panel {
+    background: rgba(20,20,19,0.90); backdrop-filter: blur(6px);
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+    font-size: 12.5px; color: var(--ink-2);
+  }
+  .hud .panel b { color: var(--ink); }
+  .hud .panel .sub { color: var(--muted); font-size: 11.5px; margin-top: 3px; }
+  .hud-row { display: flex; align-items: center; gap: 7px; margin-bottom: 7px;
+             flex-wrap: wrap; }
+  .hud-row:last-child { margin-bottom: 0; }
+  .hud select, .hud button.small {
+    background: var(--page); color: var(--ink); border: 1px solid var(--baseline);
+    border-radius: 7px; padding: 4px 8px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .hud button.small.on { border-color: var(--accent); color: var(--accent); }
+  #view-mode { display: inline-flex; border: 1px solid var(--baseline); border-radius: 7px;
+               overflow: hidden; }
+  #view-mode button { background: var(--page); color: var(--ink-2); border: none;
+                      padding: 4px 11px; font: inherit; font-size: 12px; cursor: pointer; }
+  #view-mode button.active { background: var(--accent); color: #fff; }
+  .legend-inline { display: flex; gap: 11px; align-items: center; flex-wrap: wrap;
+                   font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .legend-inline .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px;
+                       margin-right: 4px; vertical-align: -1px; }
+  #rain-meter { position: absolute; top: 12px; right: 12px; width: 172px; }
+  #rain-bar { height: 6px; border-radius: 3px; background: var(--surface-2);
+              margin-top: 6px; overflow: hidden; }
+  #rain-bar > div { height: 100%; width: 0; background: #86b6ef; transition: width .12s; }
+  #flood-stat { display: block; margin-top: 7px; font-size: 11.5px; color: var(--muted); }
+
+  #bldg-panel { position: absolute; bottom: 16px; right: 12px; width: 285px; display: none; }
+  #bldg-panel.visible { display: block; }
+  #bldg-panel h4 { color: var(--ink); font-size: 13px; margin-bottom: 4px; padding-right: 16px; }
+  #bldg-panel .close { position: absolute; top: 8px; right: 10px; background: none;
+                       border: none; color: var(--muted); cursor: pointer; font-size: 16px;
+                       line-height: 1; }
+  #bldg-panel .close:hover { color: var(--ink); }
+  #bldg-panel .dist-row { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0 2px;
+                          font-size: 12px; }
+  #bldg-panel .dist-row b { color: var(--ink); }
+  .live-depth { margin: 8px 0; padding: 6px 9px; border-radius: 7px;
+                background: var(--surface-2); font-size: 12px; }
+  .live-depth.warn { background: rgba(213,160,41,.16); color: #e5c072; }
+  .live-depth.bad { background: rgba(208,59,59,.18); color: #f08a8a; }
+
+  .timeline { display: flex; align-items: center; gap: 12px; padding: 10px 18px;
+              background: var(--surface); border-top: 1px solid var(--border); flex: none; }
+  .timeline button#btn-play { background: var(--surface-2); border: 1px solid var(--border);
+    color: var(--ink); width: 34px; height: 34px; border-radius: 8px; cursor: pointer;
+    font-size: 14px; flex: none; }
+  .timeline input[type=range] { flex: 1; accent-color: var(--accent); min-width: 60px; }
+  .timeline .t-label { font-variant-numeric: tabular-nums; color: var(--ink-2);
+                       font-size: 12.5px; min-width: 132px; }
+  .timeline select { background: var(--surface-2); color: var(--ink);
+                     border: 1px solid var(--border); border-radius: 7px; padding: 4px 6px;
+                     font: inherit; font-size: 12px; }
+  .loading-overlay { position: absolute; inset: 0; display: none; align-items: center;
+                     justify-content: center; background: rgba(13,13,13,0.55);
+                     color: var(--ink-2); font-size: 14px; }
+  .loading-overlay.visible { display: flex; }
+
+  /* ---------------- step 3: results ---------------- */
+  #screen-results { overflow-y: auto; display: none; }
+  #screen-results.active { display: block; padding: 20px 22px 50px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+           gap: 12px; margin-bottom: 18px; }
+  .tile { background: var(--surface); border: 1px solid var(--border);
+          border-radius: 12px; padding: 13px 15px; }
   .tile .k { font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
   .tile .v { font-size: 22px; font-weight: 650; }
   .tile .d { font-size: 11.5px; color: var(--ink-2); margin-top: 3px; }
   .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 980px) { .charts { grid-template-columns: 1fr; } }
-  .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .chart-card { background: var(--surface); border: 1px solid var(--border);
+                border-radius: 12px; padding: 14px 16px; }
   .chart-card h3 { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
   .chart-card .sub { font-size: 11.5px; color: var(--muted); margin-bottom: 8px; }
-  .chart-card svg { width: 100%; height: auto; display: block; }
-  .viz-tooltip {
-    position: fixed; pointer-events: none; z-index: 40; display: none;
-    background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
-    padding: 7px 10px; font-size: 12px; color: var(--ink); box-shadow: 0 4px 16px rgba(0,0,0,.5);
-  }
-  .viz-tooltip .t { color: var(--muted); font-size: 11px; }
   .runs-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  .runs-table th { text-align: right; color: var(--muted); font-weight: 500; padding: 4px 8px; border-bottom: 1px solid var(--grid); }
+  .runs-table th { text-align: right; color: var(--muted); font-weight: 500;
+                   padding: 4px 8px; border-bottom: 1px solid var(--grid); }
   .runs-table th:first-child, .runs-table td:first-child { text-align: left; }
-  .runs-table td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  .runs-table td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid);
+                   font-variant-numeric: tabular-nums; color: var(--ink-2); }
   .runs-table tr.clickable { cursor: pointer; }
   .runs-table tr.clickable:hover td { background: var(--surface-2); color: var(--ink); }
-  .rep-chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 10px; }
-  .rep-chip { background: var(--surface-2); border: 1px solid var(--border); color: var(--ink-2);
-    font: inherit; font-size: 12px; padding: 5px 11px; border-radius: 999px; cursor: pointer; }
-  .rep-chip:hover { color: var(--ink); border-color: var(--accent); }
+  .rep-chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 12px; }
+  .rep-chip { background: var(--surface-2); border: 1px solid var(--border);
+              color: var(--ink-2); font: inherit; padding: 6px 12px; border-radius: 9px;
+              cursor: pointer; text-align: left; }
+  .rep-chip b { display: block; color: var(--ink); font-size: 12.5px; }
+  .rep-chip span { font-size: 11px; color: var(--muted); }
+  .rep-chip:hover { border-color: var(--accent); }
 
-  /* ---------- static (prebaked) deployment ---------- */
-  .static-note {
-    display: none; background: rgba(57,135,229,0.10); border: 1px solid rgba(57,135,229,0.35);
-    color: var(--ink-2); border-radius: 10px; padding: 10px 12px; font-size: 12.5px;
-    margin-bottom: 18px;
+  /* ---------------- tooltip ---------------- */
+  .viz-tooltip {
+    position: fixed; pointer-events: none; z-index: 60; display: none;
+    background: rgba(26,26,25,0.97); border: 1px solid var(--border);
+    border-radius: 9px; padding: 9px 11px; font-size: 12px; color: var(--ink);
+    box-shadow: 0 6px 22px rgba(0,0,0,.6); max-width: 250px;
   }
-  .static-note a { color: var(--accent); }
-  #field-presets { display: none; }
-  body.static-mode #field-presets { display: block; }
-  body.static-mode #field-options { display: none; }
-  .presets { display: flex; flex-direction: column; gap: 8px; }
-  .preset-chip {
-    text-align: left; background: var(--page); border: 1px solid var(--baseline);
-    color: var(--ink-2); border-radius: 10px; padding: 9px 12px; cursor: pointer; font: inherit;
-  }
-  .preset-chip b { display: block; color: var(--ink); font-size: 13px; font-weight: 600; }
-  .preset-chip span { font-size: 12px; color: var(--muted); }
-  .preset-chip.selected { border-color: var(--accent); background: rgba(57,135,229,0.12); }
-
-  /* ---------- viewer ---------- */
-  #screen-viewer.active { display: flex; flex-direction: column; height: 100%; }
-  #viewer-wrap { position: relative; flex: 1; min-height: 0; }
-  #gl { width: 100%; height: 100%; display: block; cursor: grab; }
-  #gl.dragging { cursor: grabbing; }
-  .hud {
-    position: absolute; top: 12px; left: 12px; display: flex; flex-direction: column; gap: 8px;
-    max-width: 300px;
-  }
-  .hud .panel {
-    background: rgba(26,26,25,0.92); border: 1px solid var(--border); border-radius: 10px;
-    padding: 10px 12px; font-size: 12.5px; color: var(--ink-2);
-  }
-  .hud .panel b { color: var(--ink); }
-  .hud select, .hud button.small {
-    background: var(--page); color: var(--ink); border: 1px solid var(--baseline);
-    border-radius: 7px; padding: 4px 8px; font: inherit; font-size: 12px; cursor: pointer;
-  }
-  #rain-meter { position: absolute; top: 12px; right: 12px; width: 150px; }
-  #rain-meter .panel { background: rgba(26,26,25,0.92); border: 1px solid var(--border);
-    border-radius: 10px; padding: 10px 12px; font-size: 12px; color: var(--ink-2); }
-  #rain-bar { height: 6px; border-radius: 3px; background: var(--surface-2); margin-top: 6px; overflow: hidden; }
-  #rain-bar > div { height: 100%; width: 0; background: var(--seq-250); }
-  #bldg-panel { position: absolute; bottom: 76px; right: 12px; width: 270px; display: none; }
-  #bldg-panel .panel { background: rgba(26,26,25,0.94); border: 1px solid var(--border);
-    border-radius: 10px; padding: 12px 14px; font-size: 12.5px; color: var(--ink-2); }
-  #bldg-panel h4 { color: var(--ink); font-size: 13px; margin-bottom: 6px; }
-  #bldg-panel svg { width: 100%; height: auto; margin-top: 8px; }
-  .timeline {
-    display: flex; align-items: center; gap: 12px; padding: 12px 18px;
-    background: var(--surface); border-top: 1px solid var(--border);
-  }
-  .timeline button {
-    background: var(--surface-2); border: 1px solid var(--border); color: var(--ink);
-    width: 34px; height: 34px; border-radius: 8px; cursor: pointer; font-size: 14px;
-  }
-  .timeline input[type=range] { flex: 1; accent-color: var(--accent); }
-  .timeline .t-label { font-variant-numeric: tabular-nums; color: var(--ink-2); font-size: 13px; min-width: 130px; }
-  .legend-inline { display: flex; gap: 12px; align-items: center; font-size: 11.5px; color: var(--muted); }
-  .legend-inline .sw { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
-  .loading-overlay {
-    position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
-    background: rgba(13,13,13,0.55); color: var(--ink-2); font-size: 14px;
-  }
-  .loading-overlay.visible { display: flex; }
+  .viz-tooltip .t { color: var(--muted); font-size: 10.5px; margin-top: 5px; }
+  .viz-tooltip .tip-title { font-weight: 640; margin-bottom: 5px; }
+  .viz-tooltip .tip-row { display: flex; justify-content: space-between; gap: 12px;
+                          font-size: 11.5px; color: var(--muted); }
+  .viz-tooltip .tip-row b { color: var(--ink-2); font-weight: 500; }
+  .viz-tooltip .tip-live { margin-top: 6px; padding-top: 5px;
+                           border-top: 1px solid var(--grid); font-size: 11.5px; }
+  .viz-tooltip .tip-live.warn { color: #e5c072; }
+  .viz-tooltip .tip-live.bad { color: #f08a8a; }
 </style>
 </head>
 <body>
   <header>
     <h1>CitySim</h1>
     <span class="sub">environmental digital twin · Monte-Carlo extreme-weather impacts</span>
-    <nav>
-      <button id="nav-setup" class="active">Setup</button>
-      <button id="nav-dash" disabled>Results</button>
-      <button id="nav-viewer" disabled>3D Replay</button>
+    <nav id="stepper">
+      <button class="step active" data-step="1"><i>1</i>Setup</button>
+      <button class="step" data-step="2" disabled><i>2</i>Simulate</button>
+      <button class="step" data-step="3" disabled><i>3</i>Results</button>
     </nav>
   </header>
 
   <main>
-    <!-- ============ SETUP ============ -->
+    <!-- ==================== 1 · SETUP ==================== -->
     <section id="screen-setup" class="screen active">
-      <div class="setup-card">
-        <h2>Build a twin, pick a hazard, run the ensemble</h2>
-        <p class="lead">The platform builds a 3D digital twin of the region from open data
-          (or its built-in Hamilton-like demo region), then runs a Monte-Carlo ensemble of
-          storms against it and returns the damage distribution per household.</p>
-
-        <div class="static-note" id="static-note"></div>
-
-        <div class="field">
-          <label for="place">Location</label>
-          <input type="text" id="place" value="Hamilton demo (lower city)">
+      <div class="setup-top">
+        <div>
+          <h2>Build the twin, set the assumptions, run the ensemble</h2>
+          <p>Every number the model uses is on these tabs — where it came from, what it
+             moves, and what happens if it is wrong.</p>
         </div>
-        <div class="row">
-          <div class="field">
-            <label for="mode">Data mode</label>
-            <select id="mode">
-              <option value="synthetic" selected>Demo — procedural Hamilton-like region (offline)</option>
-              <option value="auto">Live — real OSM footprints over procedural terrain</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="nruns">Monte-Carlo runs</label>
-            <select id="nruns">
-              <option>48</option><option selected>96</option><option>150</option><option>300</option>
-            </select>
-          </div>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:14px">
+          <div class="twin-summary" id="twin-summary"></div>
+          <button class="btn" id="btn-go">Run simulation →</button>
         </div>
-        <div class="field">
-          <label>Hazard module</label>
-          <div class="hazards" id="hazard-list"></div>
-        </div>
-        <div class="field" id="field-presets">
-          <label>Scenario ensemble</label>
-          <div class="presets" id="preset-list"></div>
-        </div>
-        <div class="field" id="field-options">
-          <label>Scenario options</label>
-          <div class="opts">
-            <label><input type="checkbox" id="opt-valves"> Backwater valves (mitigation)</label>
-            <label>Climate scaling
-              <select id="opt-climate">
-                <option value="1.0" selected>present day</option>
-                <option value="1.15">2050 (+15% intensity)</option>
-                <option value="1.3">2080 (+30% intensity)</option>
-              </select>
-            </label>
-          </div>
-        </div>
-
-        <button class="btn" id="btn-go">Build twin &amp; run simulation</button>
-        <div class="progress-wrap" id="progress-wrap">
-          <div class="progress-bar"><div id="progress-fill"></div></div>
-          <div class="progress-msg" id="progress-msg">…</div>
-        </div>
-        <div class="twin-summary" id="twin-summary"></div>
-        <div class="error-msg" id="error-msg"></div>
+      </div>
+      <div class="static-note" id="static-note"></div>
+      <div class="field" id="field-presets">
+        <label>Scenario ensemble</label>
+        <div class="presets" id="preset-list"></div>
+      </div>
+      <div class="error-msg" id="error-msg"></div>
+      <div class="setup-body">
+        <div id="setup-tabs"></div>
+        <div id="setup-panel"></div>
       </div>
     </section>
 
-    <!-- ============ DASHBOARD ============ -->
-    <section id="screen-dash" class="screen">
+    <!-- ==================== 2 · SIMULATE ==================== -->
+    <section id="screen-sim" class="screen">
+      <div id="sim-stage">
+        <div class="inner">
+          <h2>Simulating</h2>
+          <p class="muted">Each run is one year's worst storm, solved as coupled
+             1D sewer and 2D overland flow.</p>
+          <div id="sim-progress" class="progress-wrap">
+            <div class="progress-bar"><div id="progress-fill"></div></div>
+            <div class="progress-msg" id="progress-msg">…</div>
+            <div class="progress-detail" id="progress-detail"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="viewer-stage">
+        <div id="viewer-wrap">
+          <canvas id="gl"></canvas>
+          <canvas id="rain-canvas"></canvas>
+          <div id="map-labels"></div>
+          <div class="hud">
+            <div class="panel" id="run-info"><b>No run loaded</b></div>
+            <div class="panel">
+              <div class="hud-row">
+                <span id="view-mode">
+                  <button data-mode="iso" class="active">3D</button>
+                  <button data-mode="2d">2D</button>
+                </span>
+                <button class="small" id="btn-reset-view" title="reset view (R)">reset</button>
+                <button class="small" id="toggle-pipes" title="see the sewer network">sewer</button>
+                <button class="small on" id="toggle-trees" title="show trees">trees</button>
+              </div>
+              <div class="hud-row">
+                <label for="run-select" class="muted">Storm</label>
+                <select id="run-select" style="max-width:180px"></select>
+              </div>
+              <div class="hud-row">
+                <label for="color-mode" class="muted">Colour by</label>
+                <select id="color-mode">
+                  <option value="class">material</option>
+                  <option value="loss">mean $ risk</option>
+                  <option value="age">age</option>
+                  <option value="value">value</option>
+                  <option value="storeys">storeys</option>
+                  <option value="basement">basement</option>
+                </select>
+              </div>
+              <div class="legend-inline" id="viewer-legend"></div>
+            </div>
+            <div class="panel muted">
+              drag to pan · scroll to zoom · click a building · <b>R</b> reset,
+              <b>2</b>/<b>3</b> view
+            </div>
+          </div>
+          <div id="rain-meter"><div class="panel">
+            <div>Rainfall <span id="rain-val" style="float:right;color:var(--ink)">0 mm/h</span></div>
+            <div id="rain-bar"><div></div></div>
+            <span id="flood-stat"></span>
+          </div></div>
+          <div id="bldg-panel"></div>
+          <div class="loading-overlay" id="viewer-loading">re-simulating this storm for replay…</div>
+        </div>
+        <div class="timeline">
+          <button id="btn-play" title="play">▶</button>
+          <input type="range" id="scrubber" min="0" max="100" value="0" step="1">
+          <span class="t-label" id="t-label">t = 0 min</span>
+          <select id="speed">
+            <option value="1">1×</option><option value="2" selected>2×</option>
+            <option value="4">4×</option><option value="8">8×</option>
+          </select>
+          <button class="btn" id="btn-to-results">Results →</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== 3 · RESULTS ==================== -->
+    <section id="screen-results" class="screen">
       <div class="tiles" id="tiles"></div>
       <div class="charts">
         <div class="chart-card">
           <h3>Annual damage per household</h3>
-          <div class="sub">distribution across Monte-Carlo runs (each run = the year's worst storm)</div>
+          <div class="sub">distribution across the ensemble — each run is one year's worst storm</div>
           <div id="chart-hist"></div>
         </div>
         <div class="chart-card">
@@ -281,48 +510,16 @@
           <div id="chart-mech"></div>
         </div>
         <div class="chart-card">
-          <h3>Replay a run</h3>
-          <div class="sub">jump into the 3D twin and scrub through a specific storm</div>
+          <h3>Assumptions used</h3>
+          <div class="sub">what the model believed while producing these numbers</div>
+          <div id="chart-assumptions"></div>
+        </div>
+        <div class="chart-card" style="grid-column:1/-1">
+          <h3>Replay a storm</h3>
+          <div class="sub">jump back into the twin and scrub through a specific run</div>
           <div class="rep-chips" id="rep-chips"></div>
           <table class="runs-table" id="runs-table"></table>
         </div>
-      </div>
-    </section>
-
-    <!-- ============ 3D VIEWER ============ -->
-    <section id="screen-viewer" class="screen">
-      <div id="viewer-wrap">
-        <canvas id="gl"></canvas>
-        <div class="hud">
-          <div class="panel" id="run-info"><b>No run loaded</b></div>
-          <div class="panel">
-            <div style="margin-bottom:6px">Run:
-              <select id="run-select" style="max-width:170px"></select>
-            </div>
-            <div style="margin-bottom:6px">Buildings:
-              <select id="color-mode">
-                <option value="class">by type</option>
-                <option value="loss">by mean $ risk</option>
-              </select>
-              <button class="small" id="toggle-pipes">sewer x-ray</button>
-            </div>
-            <div class="legend-inline" id="viewer-legend"></div>
-          </div>
-        </div>
-        <div id="rain-meter"><div class="panel">
-          <div>Rainfall <span id="rain-val" style="float:right;color:var(--ink)">0 mm/h</span></div>
-          <div id="rain-bar"><div></div></div>
-        </div></div>
-        <div id="bldg-panel"></div>
-        <div class="loading-overlay" id="viewer-loading">re-simulating run for replay…</div>
-      </div>
-      <div class="timeline">
-        <button id="btn-play">▶</button>
-        <input type="range" id="scrubber" min="0" max="100" value="0" step="1">
-        <span class="t-label" id="t-label">t = 0 min</span>
-        <select id="speed" style="background:var(--surface-2);color:var(--ink);border:1px solid var(--border);border-radius:7px;padding:4px 6px;font:inherit;font-size:12px">
-          <option value="1">1×</option><option value="2" selected>2×</option><option value="4">4×</option><option value="8">8×</option>
-        </select>
       </div>
     </section>
   </main>
@@ -331,8 +528,14 @@
   <!--CITYSIM_STATIC_CONFIG-->
   <!-- relative paths so the same page works served from "/" by the API and
        from a project subpath (e.g. GitHub Pages) by the static export -->
+  <script src="static/gl-core.js"></script>
+  <script src="static/viewer-build.js"></script>
   <script src="static/viewer.js"></script>
+  <script src="static/charts.js"></script>
   <script src="static/api.js"></script>
+  <script src="static/setup.js"></script>
+  <script src="static/replay.js"></script>
+  <script src="static/results.js"></script>
   <script src="static/app.js"></script>
 </body>
 </html>

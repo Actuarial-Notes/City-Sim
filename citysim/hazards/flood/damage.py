@@ -4,6 +4,10 @@ The pattern is hazard-agnostic (intensity → vulnerability curve → % loss ×
 value); only the intensity variable (water depth) and the curve library are
 flood-specific.
 
+The curves themselves live in ``assumptions.py`` alongside every other model
+constant, so the Setup screen can plot exactly the numbers this file
+interpolates rather than a hand-copied duplicate.
+
 Curves are piecewise-linear fractions of value vs depth, shaped after the
 southern-Ontario depth-damage-curve literature (Paragon/EC/OMNR base set and
 the IBI/Hatch synthetic curves): separate basement and main-floor curves,
@@ -25,27 +29,25 @@ from __future__ import annotations
 
 import numpy as np
 
-# (depth m, fraction of value) — structure damage
-BASEMENT_STRUCT = {
-    "masonry":    [(0.0, 0.0), (0.05, 0.020), (0.3, 0.045), (0.6, 0.060),
-                   (1.0, 0.075), (1.5, 0.090), (2.5, 0.110)],
-    "wood_frame": [(0.0, 0.0), (0.05, 0.024), (0.3, 0.052), (0.6, 0.070),
-                   (1.0, 0.088), (1.5, 0.105), (2.5, 0.128)],
-}
-MAIN_STRUCT = [(0.0, 0.0), (0.1, 0.05), (0.3, 0.12), (0.6, 0.20),
-               (1.0, 0.27), (1.5, 0.33), (2.0, 0.40), (3.0, 0.48)]
-# basement contents are only the share of total contents kept below grade
-BASEMENT_CONTENTS = [(0.0, 0.0), (0.1, 0.05), (0.5, 0.16), (1.0, 0.25), (2.0, 0.33)]
-MAIN_CONTENTS = [(0.0, 0.0), (0.3, 0.30), (1.0, 0.60), (2.0, 0.80)]
+from .assumptions import (
+    BASEMENT_CONTENTS,
+    BASEMENT_STRUCT,
+    DEFAULTS,
+    MAIN_CONTENTS,
+    MAIN_STRUCT,
+)
 
+# Constants re-exported for readers who arrive here first; the values (and the
+# ranges a user may move them over) are declared in assumptions.py.
+#
 # depth of standing water at a building needed before it enters the basement
 # (window wells / low sills; below this, foundation drainage keeps up)
-SILL_DEPTH = 0.25
+SILL_DEPTH = DEFAULTS["sill_depth"]
 # static (trap/lateral) head loss before backup reaches the basement floor
-BACKUP_FREEBOARD = 0.20
+BACKUP_FREEBOARD = DEFAULTS["backup_freeboard"]
 # head-to-depth attenuation along the service lateral: friction losses and the
 # finite surcharge duration keep the basement below full HGL equilibrium
-LATERAL_FACTOR = 0.6
+LATERAL_FACTOR = DEFAULTS["lateral_factor"]
 
 
 def _interp(curve: list[tuple[float, float]], depth: float) -> float:
@@ -56,14 +58,22 @@ def _interp(curve: list[tuple[float, float]], depth: float) -> float:
 
 
 def building_loss(b, surface_depth: float, backup_head: float | None,
-                  ddc_factor: float = 1.0) -> dict:
+                  ddc_factor: float = 1.0, params: dict | None = None) -> dict:
     """Loss for one building in one run.
 
     surface_depth : max overland water depth beside the building (m)
     backup_head   : peak sewer HGL elevation at its combined node (m ASL), or
                     None if not on a combined system
     ddc_factor    : probabilistic DDC scale draw
+    params        : resolved assumption set (``assumptions.resolve``); defaults
+                    when omitted, so every existing caller keeps working
     """
+    p = params or DEFAULTS
+    sill = p.get("sill_depth", SILL_DEPTH)
+    freeboard = p.get("backup_freeboard", BACKUP_FREEBOARD)
+    lateral = p.get("lateral_factor", LATERAL_FACTOR)
+    severity = p.get("ddc_severity", 1.0)
+
     structure = 0.0
     contents = 0.0
     mechanisms = []
@@ -75,10 +85,10 @@ def building_loss(b, surface_depth: float, backup_head: float | None,
         backup_depth = 0.0
         if backup_head is not None:
             backup_depth = np.clip(
-                (backup_head - BACKUP_FREEBOARD - b.basement_floor_elev) * LATERAL_FACTOR,
+                (backup_head - freeboard - b.basement_floor_elev) * lateral,
                 0.0, basement_h + 0.3)
         inund_depth = 0.0
-        if surface_depth > SILL_DEPTH:
+        if surface_depth > sill:
             inund_depth = min(surface_depth, basement_h)
         depth_b = float(max(backup_depth, inund_depth))
         if depth_b > 0.0:
@@ -92,8 +102,9 @@ def building_loss(b, surface_depth: float, backup_head: float | None,
         contents += _interp(MAIN_CONTENTS, over_floor) * b.contents_value
         mechanisms.append("overland_flooding")
 
-    structure *= ddc_factor
-    contents *= ddc_factor
+    scale = ddc_factor * severity
+    structure *= scale
+    contents *= scale
     return {
         "structure_loss": round(structure, 2),
         "contents_loss": round(contents, 2),

@@ -14,12 +14,18 @@ from __future__ import annotations
 import numpy as np
 
 from citysim.twin.schema import Twin
+from .assumptions import DEFAULTS as ASSUMPTION_DEFAULTS
 from .surface2d import Surface2D
 from .sewer1d import Sewer1D
 
 
-def prepare_masks(twin: Twin) -> dict:
-    """Static grid-side precomputation shared by every run on a twin."""
+def prepare_masks(twin: Twin, lateral_reach_m: float = 90.0) -> dict:
+    """Static grid-side precomputation shared by every run on a twin.
+
+    ``lateral_reach_m`` is how far a building can be from a combined-sewer node
+    and still be on the backup pathway. It changes the mask, so masks are cached
+    per (twin, reach) rather than per twin.
+    """
     ny, nx = twin.terrain.shape
     cell = twin.terrain.cell_size
 
@@ -49,7 +55,7 @@ def prepare_masks(twin: Twin) -> dict:
     combined = [(k, n) for k, n in enumerate(twin.sewer.nodes) if n.system == "combined"]
     backup_node: dict[str, int | None] = {}
     for b in twin.buildings:
-        best, best_d = None, 90.0        # service-lateral reach, metres
+        best, best_d = None, float(lateral_reach_m)   # service-lateral reach, metres
         for k, n in combined:
             d = float(np.hypot(n.x - b.centroid[0], n.y - b.centroid[1]))
             if d < best_d:
@@ -63,15 +69,27 @@ def prepare_masks(twin: Twin) -> dict:
 def run_coupled(twin: Twin, hyetograph_mmh: np.ndarray, hyeto_dt_s: float,
                 masks: dict | None = None, blockage_factor: float = 1.0,
                 infil_factor: float = 1.0, manning_factor: float = 1.0,
-                drain_time_s: float = 2400.0, record_frames: bool = False,
-                frame_dt_s: float = 120.0) -> dict:
+                drain_time_s: float | None = None, record_frames: bool = False,
+                frame_dt_s: float | None = None, params: dict | None = None) -> dict:
     """One deterministic coupled simulation.
 
     infil_factor scales infiltration capacity (antecedent-moisture draw);
     manning_factor scales surface roughness; blockage_factor derates pipes.
+
+    ``params`` is a resolved assumption set (``flood.assumptions.resolve``);
+    the solver-group knobs are read from it. Explicit ``drain_time_s`` /
+    ``frame_dt_s`` arguments still win, so existing callers are unaffected.
     """
+    p = params or ASSUMPTION_DEFAULTS
+    if drain_time_s is None:
+        drain_time_s = p.get("drain_time_s", ASSUMPTION_DEFAULTS["drain_time_s"])
+    if frame_dt_s is None:
+        frame_dt_s = p.get("frame_dt_s", ASSUMPTION_DEFAULTS["frame_dt_s"])
+
     if masks is None:
-        masks = prepare_masks(twin)
+        masks = prepare_masks(
+            twin, lateral_reach_m=p.get("lateral_reach_m",
+                                        ASSUMPTION_DEFAULTS["lateral_reach_m"]))
 
     surface = Surface2D(
         dem=twin.terrain.dtm,
@@ -80,12 +98,30 @@ def run_coupled(twin: Twin, hyetograph_mmh: np.ndarray, hyeto_dt_s: float,
         infiltration_mmh=twin.landcover.infiltration * infil_factor,
         imperviousness=twin.landcover.imperviousness,
         building_mask=masks["building_mask"],
+        alpha=p.get("cfl_alpha", ASSUMPTION_DEFAULTS["cfl_alpha"]),
+        building_raise=p.get("building_raise", ASSUMPTION_DEFAULTS["building_raise"]),
     )
-    sewer = Sewer1D(twin.sewer, blockage_factor=blockage_factor)
+    sewer = Sewer1D(
+        twin.sewer, blockage_factor=blockage_factor,
+        chamber_area=p.get("chamber_area", ASSUMPTION_DEFAULTS["chamber_area"]),
+        dwf_per_node=p.get("dwf_per_node", ASSUMPTION_DEFAULTS["dwf_per_node"]),
+    )
 
     node_cells = masks["node_cells"]
     n_nodes = len(node_cells)
     cell_area = twin.terrain.cell_size ** 2
+    # node → grid cell as index arrays, so the exchange is two scatter/gathers
+    # rather than a Python loop over every node on every step
+    node_i = np.array([c[0] for c in node_cells], dtype=np.intp)
+    node_j = np.array([c[1] for c in node_cells], dtype=np.intp)
+    node_idx = (node_i, node_j)
+    capturing = ~sewer.is_outfall
+
+    # The 1D network is stepped on its own, coarser clock. The surface timestep
+    # is CFL-limited and can fall below a second, but the sewer is a storage
+    # model with no such constraint — running it at every surface step is pure
+    # overhead. Inflow accumulates between sewer steps so no volume is lost.
+    coupling_dt = float(p.get("coupling_dt_s", ASSUMPTION_DEFAULTS["coupling_dt_s"]))
 
     t_storm = len(hyetograph_mmh) * hyeto_dt_s
     t_end = t_storm + drain_time_s
@@ -93,7 +129,11 @@ def run_coupled(twin: Twin, hyetograph_mmh: np.ndarray, hyeto_dt_s: float,
     max_depth = np.zeros_like(surface.h)
     frames: list[dict] = []
     next_frame = 0.0
+    surcharging = np.zeros(n_nodes, dtype=bool)
     surcharging_prev = np.zeros(n_nodes, dtype=bool)
+    pending_volume = np.zeros(n_nodes)     # m³ captured since the last sewer step
+    pending_dt = 0.0
+    surcharge_q = np.zeros(n_nodes)        # m³/s still being pushed back out
 
     while t < t_end:
         dt = min(surface.stable_dt(), t_end - t)
@@ -101,26 +141,23 @@ def run_coupled(twin: Twin, hyetograph_mmh: np.ndarray, hyeto_dt_s: float,
         rain_ms = (hyetograph_mmh[k] / 1000.0 / 3600.0) if t < t_storm else 0.0
 
         # surface → sewer: catchbasin intake limited by grate capacity & water present
-        inflow = np.zeros(n_nodes)
-        sinks: list[tuple[int, int, float]] = []
-        for ni, (i, j) in enumerate(node_cells):
-            if sewer.is_outfall[ni]:
-                continue
-            h = surface.h[i, j]
-            if h > 1e-3:
-                q = min(sewer.max_inflow[ni], h * cell_area / dt)
-                inflow[ni] = q
-                sinks.append((i, j, -q))
+        h_at_node = surface.h[node_idx]
+        capture = np.where(capturing & (h_at_node > 1e-3),
+                           np.minimum(sewer.max_inflow, h_at_node * cell_area / dt),
+                           0.0)
+        pending_volume += capture * dt
+        pending_dt += dt
 
         # sewer → surface: surcharge volume injected at manhole cells
-        excess = sewer.step(dt, inflow)
-        sources = sinks
-        surcharging = excess > 1e-6
-        for ni in np.where(surcharging)[0]:
-            i, j = node_cells[ni]
-            sources.append((i, j, excess[ni] / dt))
+        if pending_dt >= coupling_dt or t + dt >= t_end:
+            excess = sewer.step(pending_dt, pending_volume / pending_dt)
+            surcharging = excess > 1e-6
+            surcharge_q = excess / pending_dt
+            pending_volume[:] = 0.0
+            pending_dt = 0.0
 
-        surface.step(dt, rain_ms=rain_ms, point_sources=sources)
+        net_q = surcharge_q - capture
+        surface.step(dt, rain_ms=rain_ms, source_idx=node_idx, source_q=net_q)
         # open boundary at the north edge (the harbour): water leaves the domain
         surface.h[-1, :] = 0.0
 

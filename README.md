@@ -16,9 +16,12 @@ A prebaked deployment: the flood solver runs in CI (`.github/workflows/
 pages.yml`), and the twin, four scenario ensembles and their 3D replays ship as
 static data — so the hosted demo is the real physics, it just can't launch
 *new* ensembles. Pick a scenario (present day, backwater valves, 2050 climate,
-2050 + valves), read the dashboard, then scrub a storm in the 3D viewer.
+2050 + valves), read the dashboard, then scrub a storm in the 3D viewer. Every
+model assumption is on display there too; it just can't be changed, because
+there is no solver behind it to re-run.
 
-To build twins for other places and run your own ensembles, run it yourself.
+To build twins for other places, change assumptions and run your own ensembles,
+run it yourself.
 
 ## Running it yourself
 
@@ -33,19 +36,65 @@ uvicorn citysim.server.app:app --port 8000
 # then open http://localhost:8000
 ```
 
-In the browser: pick a location and hazard, hit **Build twin & run simulation**,
-watch the ensemble progress, then explore the **Results** dashboard (damage
-distribution, exceedance curve, damage mechanisms) and the **3D Replay** viewer —
-scrub any storm through time, watch manholes surcharge, colour buildings by
-mean $ risk, x-ray the sewer network, and click any building for its personal
-damage distribution across all runs.
-
 Or run the container: `docker build -t citysim . && docker run -p 8000:8000
 citysim`. Deploying either version — Pages, Fly.io, Render — is
 [DEPLOY.md](DEPLOY.md).
 
-Tests: `python -m pytest` (36 tests: physics, calibration, determinism, API,
-static export).
+Tests: `python -m pytest` (physics, calibration, determinism, assumption
+plumbing, API, static export).
+
+## The three-step workflow
+
+```
+1  SETUP       build the twin, and see — and change — every model assumption
+2  SIMULATE    run the ensemble, then watch a storm play out in the twin
+3  RESULTS     the damage distribution, and a record of what was assumed
+```
+
+### 1 · Setup — the model is not a black box
+
+Eight tabs, each pairing controls with the actual curve or table they move:
+
+| Tab | What it holds |
+|---|---|
+| **Region** | The real Hamilton extent, terrain profile from the escarpment to the harbour, land cover. Shown in full, not adjustable — this is geography, not a modelling choice. |
+| **Building stock** | Era, material, storey and basement priors, with live histograms of the stock that comes out. |
+| **Sewer network** | Combined-sewer extent, pipe capacity, invert depth, inlet capacity, and an annotated section of the backup pathway. |
+| **Storm & IDF** | The Hamilton IDF curves plotted from the table the solver interpolates, plus a live Chicago design-storm preview. |
+| **Vulnerability** | All five depth-damage curves, the probabilistic-DDC uncertainty band, and the three damage mechanisms. |
+| **Economics** | Replacement cost per m² by use, contents ratios, and a running total-exposure figure. |
+| **Monte-Carlo** | Run count, seed, and the seven sampled dimensions as range strips. Mitigation and solver settings live here too. |
+| **Sources** | Every citation, what it informs, how faithfully it is implemented, and the honest limitations. |
+
+Controls are not hand-written. `citysim/hazards/flood/assumptions.py` and
+`citysim/twin/params.py` declare each knob's range, units, description, what it
+affects and where it came from; the UI renders itself from that spec, and
+`GET /api/hazards/flood/assumptions` serves it. Declaring a new assumption in
+Python is all it takes to make it visible and adjustable — and a test fails if a
+knob is declared but never actually read by the solver, because a slider the
+model ignores is worse than no slider.
+
+Overrides are clamped server-side and travel with each scenario, so
+`GET /api/results/{job}/assumptions` reports what the solver *ran* with rather
+than what the form submitted.
+
+### 2 · Simulate — shown through replay
+
+The ensemble runs, then a representative storm loads and plays automatically:
+rain intensity drives the sky, the rain overlay and the water surface; manholes
+flash as they surcharge; hovering a building gives its full physical record plus
+the depth standing against it *at that moment*; clicking it gives its loss
+distribution across every run.
+
+The camera is **orthographic with a fixed heading** — isometric or straight-down
+2D, with pan and zoom only, and deliberately no rotate. Wheel and pinch zoom
+anchor on the cursor; drag, arrows/WASD pan; `R` resets, `2`/`3` switch view.
+
+### 3 · Results
+
+Damage distribution, exceedance curve, mechanism mix, the worst-run table — plus
+an **Assumptions used** card that highlights anything moved off default and
+records the seed the ensemble is reproducible from.
 
 ## Three tiers
 
@@ -54,10 +103,11 @@ The central design decision — three tiers, kept strictly separate:
 ```
 TIER 1  Web app         FastAPI + job queue + SPA + WebGL 3D replay viewer
         (interface)     knows nothing about any specific hazard: the hazard
-                        picker, dashboards and viewer are driven by the
-                        registry. The SPA talks to a backend interface
-                        (static/api.js), so the same front end runs against
-                        the live API or a prebaked static export.
+                        picker, the Setup tabs, dashboards and viewer are all
+                        driven by registries and declarative specs. The SPA
+                        talks to a backend interface (static/api.js), so the
+                        same front end runs against the live API or a prebaked
+                        static export.
 ─────────────────────────────────────────────────────────────────────────────
 TIER 2  Twin core       citysim/twin — terrain (DTM), buildings (footprint,
         (hazard-        height, material, age, value), sewer/storm network,
@@ -110,9 +160,17 @@ Urban rain flooding — especially basement backup — is modelled as a coupled
   blockage/derating, DDC uncertainty. Latin Hypercube over 7 dims; every run
   carries its own seed and is **exactly reproducible**.
 
-**Mitigation scenarios**: `{"backwater_valves": true}` severs the backup
-pathway (Hamilton's Protective Plumbing Program); `{"climate_factor": 1.15}`
-scales storm intensity for 2050-style IDF shifts. Both are exposed in the UI.
+**Mitigation scenarios**: `backwater_valves` severs the backup pathway (Hamilton's
+Protective Plumbing Program), modelled as an *adoption rate* times an
+*effectiveness fraction* rather than a switch — uptake on a subsidy program is
+never universal and valves are not perfect. Which homes have one is fixed by a
+stable hash of the building id, so runs stay reproducible across worker processes.
+`climate_factor` scales storm intensity for 2050-style IDF shifts.
+
+**Every constant above is declared, ranged and cited** in
+`citysim/hazards/flood/assumptions.py` — the IDF table, all five depth-damage
+curves, the seven sampling ranges, the basement-entry constants, the land-cover
+hydrology table, the solver settings — and adjustable from the Setup screen.
 
 ### Replay without storing terabytes
 
@@ -126,8 +184,29 @@ fraction of the disk.
 
 | Mode | What happens |
 |---|---|
-| `synthetic` (default) | Deterministic procedural Hamilton-like region: escarpment, harbour-sloping plain, buried-creek ponding corridor, combined-sewer old core, era-realistic building stock. Always works, fully offline. |
-| `auto` | Geocodes the place (Nominatim) and pulls real OSM building footprints (Overpass) over procedural terrain — a *hybrid* twin for any city name. Falls back to synthetic on any network failure. |
+| `hamilton` (default) | The real lower city: actual street centrelines and names, the Niagara Escarpment brow, the harbour shoreline, parks, rail corridors, and the combined-sewer core. Always works offline. |
+| `synthetic` | Deterministic procedural Hamilton-*like* region: escarpment, harbour-sloping plain, buried-creek ponding corridor, combined-sewer old core, era-realistic building stock. Fully offline, and much smaller/faster than the real extent. |
+| `auto` | Geocodes any place (Nominatim) and pulls real OSM building footprints (Overpass) over procedural terrain — a *hybrid* twin for any city name. Falls back to synthetic on any network failure. |
+
+### The Hamilton twin
+
+`scripts/bake_hamilton.py` fetches streets, footprints, water, parks, land use and
+the escarpment from OpenStreetMap into
+`citysim/twin/data/hamilton_lower_city.json.gz`. The Pages workflow runs it before
+baking the site, so the hosted demo is on surveyed geometry.
+
+Because that needs network access, a **hand-digitized fallback** ships committed in
+`citysim/twin/data/hamilton_base.py`: real bbox, real named arterials at the grid's
+real orientation, the escarpment brow, the harbour shoreline, parks, rail and
+landmark labels, with minor residential streets filled in to Hamilton's actual
+~90 × 100 m block spacing. It is an approximation, labelled as one in the Sources
+tab, and it makes the offline default recognisably Hamilton.
+
+What is real either way: street topology and names, shoreline, escarpment, parks,
+the industrial north end, the combined-sewer core, and — with the bake — footprints,
+storeys and use. What is still generated: terrain elevations (conditioned on the
+real escarpment and shoreline; the LiDAR connector needs GDAL), the sewer network
+laid along the real streets, and per-building age, material, foundation and value.
 
 `citysim/twin/connectors/` also documents the full live-data path from the
 build plan — Ontario GeoHub LiDAR DTM/DSM (ArcGIS ImageServer), City of
@@ -142,6 +221,9 @@ PySWMM (drop-in behind `Sewer1D`'s interface) and GPU SynxFlow (behind
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/hazards` | available + roadmap hazard modules (drives the picker) |
+| `GET /api/hazards/{name}/assumptions` | every knob, curve, citation and caveat (drives Setup) |
+| `GET /api/twin/params` | twin-generation parameter spec |
+| `GET /api/results/{job}/assumptions` | the set this ensemble actually ran under |
 | `POST /api/twin` | build a twin for a place (returns a job) |
 | `GET /api/twin/{id}/scene` | 3D scene payload for the viewer |
 | `POST /api/simulate` | launch a Monte-Carlo batch (returns a job) |
@@ -168,16 +250,27 @@ own vulnerability interpretation.
 
 ## Honest limitations
 
-- The demo terrain/sewer are procedural (LiDAR + sewer-layer connectors are
-  stubs pending GDAL); absolute dollar figures are illustrative, though the
-  per-claim magnitudes and mechanism mix are calibrated to published Ontario
-  benchmarks.
+These are also served from the code (`assumptions.LIMITATIONS`) and shown on the
+Setup screen's Sources tab, so they cannot drift away from this file.
+
+- Terrain and the sewer network are generated, though conditioned on the real
+  escarpment, shoreline and street grid (the LiDAR and municipal sewer connectors
+  are stubs pending GDAL). Absolute dollar figures are illustrative; the per-claim
+  magnitudes and mechanism mix are calibrated to published Ontario benchmarks.
+- The committed Hamilton base map is hand-digitized, not surveyed. Run
+  `scripts/bake_hamilton.py` for real OpenStreetMap geometry.
 - The 1D sewer model is a capacity/storage surrogate for SWMM dynamic-wave
-  routing; the 2D solver is CPU NumPy at ~6 m resolution (city-block scale,
-  not lot scale).
-- Household aggregation reports the residential mean per household;
-  multi-unit buildings split losses evenly across units.
+  routing; the 2D solver is CPU NumPy at ~10 m resolution on the Hamilton twin
+  (city-block scale, not lot scale). The 1D and 2D sides exchange water on a
+  coupling timestep coarser than the 2D CFL step.
+- Building age, material, foundation and basement depth come from era priors, not
+  assessment or permit records.
+- Depth-damage curves are shaped after the southern-Ontario literature and
+  calibrated, not digitised from source curves — which is what the severity knob
+  and its uncertainty band exist to expose.
+- Household aggregation reports the residential mean per household; multi-unit
+  buildings split losses evenly across units.
 - The hosted demo is prebaked. Its numbers come from the real solver, but the
   scenarios and the runs you can replay are the ones baked at build time —
-  arbitrary places, ensemble sizes and mitigation combinations need the full
-  app.
+  arbitrary places, ensemble sizes, assumption changes and mitigation
+  combinations need the full app.

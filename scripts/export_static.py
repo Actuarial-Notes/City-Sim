@@ -13,10 +13,13 @@ deployed demo runs the real physics; it just cannot launch *new* ensembles.
 Layout produced::
 
     site/index.html                       (+ injected static-mode config)
-    site/static/{app,api,viewer}.js
+    site/static/*.js                      every script index.html references
     site/data/manifest.json               twin summary, hazards, presets
-    site/data/scene.json                  3D scene (terrain, buildings, sewer)
+    site/data/scene.json                  3D scene (terrain, buildings, streets)
+    site/data/assumptions.json            = GET /api/hazards/flood/assumptions
+    site/data/twin_params.json            = GET /api/twin/params
     site/data/<preset>/results.json       = GET /api/results/{job}
+    site/data/<preset>/assumptions.json   = GET /api/results/{job}/assumptions
     site/data/<preset>/building_losses.bin.gz   float32 (n_runs × n_buildings)
     site/data/<preset>/runs/<n>.bin.gz    = GET /api/results/{job}/runs/{n}/frames
 """
@@ -28,6 +31,7 @@ import builtins
 import functools
 import gzip
 import json
+import re
 import shutil
 import sys
 import time
@@ -43,10 +47,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 print = functools.partial(builtins.print, flush=True)     # noqa: A001
 
 from citysim.hazards import get_module                       # noqa: E402
+from citysim.hazards.flood import assumptions as flood_assumptions   # noqa: E402
+from citysim.hazards.flood.module import FloodModule         # noqa: E402
 from citysim.hazards.registry import list_modules            # noqa: E402
 from citysim.montecarlo import MonteCarloRunner              # noqa: E402
 from citysim.results import pack_frames                      # noqa: E402
 from citysim.twin import build_twin, scene_payload           # noqa: E402
+from citysim.twin import params as twin_params               # noqa: E402
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "citysim" / "server" / "static"
 REPO_URL = "https://github.com/Actuarial-Notes/City-Sim"
@@ -130,10 +137,24 @@ def runs_to_bake(output: dict, n_top: int) -> list[int]:
 
 
 def copy_front_end(out: Path, manifest_url: str) -> None:
+    """Copy the SPA, and prove that every script it references came along.
+
+    The file list used to be hardcoded, which meant adding a script to
+    index.html silently produced a deploy that 404s. It is now derived from the
+    page itself.
+    """
     (out / "static").mkdir(parents=True, exist_ok=True)
-    for name in ("app.js", "api.js", "viewer.js"):
-        shutil.copy(STATIC_DIR / name, out / "static" / name)
     html = (STATIC_DIR / "index.html").read_text()
+
+    referenced = re.findall(r'<script src="static/([^"]+)"', html)
+    if not referenced:
+        raise SystemExit("index.html references no scripts — check the markup")
+    for name in referenced:
+        src = STATIC_DIR / name
+        if not src.exists():
+            raise SystemExit(f"index.html references static/{name}, which does not exist")
+        shutil.copy(src, out / "static" / name)
+
     marker = "<!--CITYSIM_STATIC_CONFIG-->"
     if marker not in html:
         raise SystemExit("index.html is missing the CITYSIM_STATIC_CONFIG marker")
@@ -154,8 +175,9 @@ def main() -> None:
     ap.add_argument("--frame-runs", type=int, default=8,
                     help="worst-loss runs to bake replay frames for, per preset "
                          "(the representative runs are always included)")
-    ap.add_argument("--place", default="Hamilton demo (lower city)")
-    ap.add_argument("--mode", default="synthetic", choices=["synthetic", "auto"])
+    ap.add_argument("--place", default="Hamilton (lower city)")
+    ap.add_argument("--mode", default="hamilton",
+                    choices=["hamilton", "synthetic", "auto"])
     ap.add_argument("--presets", default="",
                     help="comma-separated preset ids (default: all)")
     args = ap.parse_args()
@@ -181,6 +203,12 @@ def main() -> None:
     n_bytes = write_json(out / "data" / "scene.json", scene_payload(twin))
     print(f"   scene.json {n_bytes/1e3:.0f} kB")
 
+    # The Setup tabs render from these. A prebaked deploy cannot re-run the
+    # solver, but it can and should still show every curve, table and citation —
+    # the assumptions are not adjustable there, they are not hidden.
+    write_json(out / "data" / "assumptions.json", flood_assumptions.spec())
+    write_json(out / "data" / "twin_params.json", twin_params.spec())
+
     module = get_module("flood")
     runner = MonteCarloRunner(twin, module, workers=args.workers)
     manifest_presets = []
@@ -199,6 +227,17 @@ def main() -> None:
         pdir = out / "data" / preset["id"]
         write_json(pdir / "results.json",
                    results_payload(preset["id"], twin.id, output))
+        # what this ensemble actually ran under — read back from its scenarios,
+        # exactly as GET /api/results/{job}/assumptions does
+        resolved = FloodModule.resolved(output["scenarios"][0])
+        write_json(pdir / "assumptions.json", {
+            "resolved": resolved,
+            "deviations": flood_assumptions.deviations(resolved),
+            "twin_params": twin.params,
+            "twin_deviations": twin_params.deviations(twin.params),
+            "seed": args.seed,
+            "n_runs": args.runs,
+        })
         write_gz(pdir / "building_losses.bin.gz",
                  output["building_matrix"].astype("<f4").tobytes())
 

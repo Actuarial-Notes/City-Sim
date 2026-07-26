@@ -3,6 +3,8 @@
 Endpoints (all hazard-agnostic; the hazard registry drives the picker):
 
   GET  /api/hazards                       available + planned hazard modules
+  GET  /api/hazards/{name}/assumptions    adjustable knobs, curves, sources
+  GET  /api/twin/params                   twin-generation parameter spec
   POST /api/twin                          build a twin for a place (job)
   GET  /api/twins                         stored twins
   GET  /api/twin/{twin_id}/scene          3D scene payload for the viewer
@@ -10,6 +12,7 @@ Endpoints (all hazard-agnostic; the hazard registry drives the picker):
   GET  /api/jobs/{job_id}                 job status/progress (poll)
   WS   /ws/jobs/{job_id}                  job progress stream
   GET  /api/results/{job_id}              distributions, exceedance, per-building $
+  GET  /api/results/{job_id}/assumptions  the set this ensemble actually ran under
   GET  /api/results/{job_id}/runs/{run}/frames   replay frames (binary)
 
 Replay frames are re-simulated deterministically from the run's stored
@@ -35,6 +38,7 @@ from citysim.hazards.registry import list_modules
 from citysim.montecarlo import MonteCarloRunner
 from citysim.results import ResultsStore, pack_frames
 from citysim.twin import build_twin, scene_payload
+from citysim.twin import params as twin_params
 from citysim.twin.store import TwinStore
 from .jobs import JobManager
 
@@ -69,17 +73,38 @@ def hazards() -> list[dict]:
     return list_modules()
 
 
+@app.get("/api/hazards/{name}/assumptions")
+def hazard_assumptions(name: str) -> dict:
+    """Every adjustable assumption, curve, citation and caveat for a hazard.
+
+    The Setup screen renders itself from this, so a new model constant becomes
+    visible and adjustable by being declared — no front-end change.
+    """
+    if name != "flood":
+        raise HTTPException(404, f"no assumption spec for hazard {name}")
+    from citysim.hazards.flood import assumptions
+    return assumptions.spec()
+
+
 # ------------------------------------------------------------------ twins
+@app.get("/api/twin/params")
+def twin_param_spec() -> dict:
+    """The twin-generation parameter spec — the 'character creation' knobs."""
+    return twin_params.spec()
+
+
 class TwinRequest(BaseModel):
-    place: str = "Hamilton demo (lower city)"
-    mode: str = "synthetic"        # synthetic | auto (auto tries live OSM data)
+    place: str = "Hamilton (lower city)"
+    # hamilton (real geometry) | synthetic (procedural) | auto (live OSM overlay)
+    mode: str = "hamilton"
+    params: dict = {}              # twin-generation overrides (citysim.twin.params)
 
 
 @app.post("/api/twin")
 def create_twin(req: TwinRequest) -> dict:
     def _build(handle):
         handle.progress(0.1, "ingesting open data / generating twin")
-        twin = build_twin(place=req.place, mode=req.mode)
+        twin = build_twin(place=req.place, mode=req.mode, params=req.params)
         handle.progress(0.8, "persisting twin")
         twin_store.save(twin)
         _twin_cache[twin.id] = twin
@@ -189,6 +214,35 @@ def results(job_id: str) -> dict:
         "duration_h": s["duration_h"],
     } for r, s in zip(payload["runs"], payload["scenarios"])]
     return payload
+
+
+@app.get("/api/results/{job_id}/assumptions")
+def results_assumptions(job_id: str) -> dict:
+    """The assumption set this ensemble actually ran under.
+
+    Read back from the stored scenarios rather than from the request, so what
+    Results reports is what the solver used — including any value the API
+    clamped on the way in.
+    """
+    if not results_store.exists(job_id):
+        raise HTTPException(404, "results not found")
+    payload = results_store.load_job(job_id)
+    from citysim.hazards.flood import assumptions
+    from citysim.hazards.flood.module import FloodModule
+
+    scenarios = payload.get("scenarios") or []
+    resolved = FloodModule.resolved(scenarios[0]) if scenarios else assumptions.DEFAULTS
+    twin_p = {}
+    if twin_store.exists(payload.get("twin_id", "")):
+        twin_p = _load_twin(payload["twin_id"]).params or {}
+    return {
+        "resolved": resolved,
+        "deviations": assumptions.deviations(resolved),
+        "twin_params": twin_p,
+        "twin_deviations": twin_params.deviations(twin_p) if twin_p else [],
+        "seed": payload.get("stats", {}).get("seed"),
+        "n_runs": payload.get("stats", {}).get("n_runs"),
+    }
 
 
 @app.get("/api/results/{job_id}/buildings/{building_id}")
