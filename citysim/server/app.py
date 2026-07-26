@@ -20,8 +20,7 @@ of every run.
 
 from __future__ import annotations
 
-import json
-import struct
+import os
 from pathlib import Path
 
 import numpy as np
@@ -34,12 +33,15 @@ from pydantic import BaseModel
 from citysim.hazards import get_module
 from citysim.hazards.registry import list_modules
 from citysim.montecarlo import MonteCarloRunner
-from citysim.results import ResultsStore
-from citysim.twin import build_twin
+from citysim.results import ResultsStore, pack_frames
+from citysim.twin import build_twin, scene_payload
 from citysim.twin.store import TwinStore
 from .jobs import JobManager
 
-DATA_ROOT = Path(__file__).resolve().parents[2] / "data"
+# Twins/results live outside the package so a container can mount a volume
+# over them (`CITYSIM_DATA_DIR=/data`); defaults to ./data beside the repo.
+DATA_ROOT = Path(os.environ.get("CITYSIM_DATA_DIR")
+                 or Path(__file__).resolve().parents[2] / "data")
 STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(title="CitySim — environmental digital twin")
@@ -94,31 +96,7 @@ def twins() -> list[dict]:
 
 @app.get("/api/twin/{twin_id}/scene")
 def twin_scene(twin_id: str) -> dict:
-    twin = _load_twin(twin_id)
-    t = twin.terrain
-    return {
-        "summary": twin.summary(),
-        "cell_size": t.cell_size,
-        "shape": list(t.shape),
-        "dtm": np.round(t.dtm, 2).flatten().tolist(),
-        "landcover": twin.landcover.classes.flatten().astype(int).tolist(),
-        "buildings": [{
-            "id": b.id, "footprint": b.footprint, "height": round(b.height, 1),
-            "ground_elev": round(b.ground_elev, 2), "use": b.use,
-            "material": b.material, "year_built": b.year_built,
-            "storeys": b.storeys, "has_basement": b.has_basement,
-            "dwelling_units": b.dwelling_units,
-            "structure_value": b.structure_value,
-        } for b in twin.buildings],
-        "sewer": {
-            "nodes": [{"id": n.id, "x": n.x, "y": n.y, "kind": n.kind,
-                       "system": n.system, "rim_elev": round(n.rim_elev, 2)}
-                      for n in twin.sewer.nodes],
-            "conduits": [{"from": c.from_node, "to": c.to_node,
-                          "diameter": c.diameter, "system": c.system}
-                         for c in twin.sewer.conduits],
-        },
-    }
+    return scene_payload(_load_twin(twin_id))
 
 
 # ------------------------------------------------------------------ simulate
@@ -235,11 +213,7 @@ def building_distribution(job_id: str, building_id: str) -> dict:
 
 @app.get("/api/results/{job_id}/runs/{run}/frames")
 def run_frames(job_id: str, run: int) -> Response:
-    """Binary replay payload:  [uint32 header_len][header JSON][uint16 depth mm].
-
-    Depth grids are quantised to millimetres (uint16) — visually lossless for
-    a depth overlay and 4× smaller than float64 JSON before gzip.
-    """
+    """Binary replay payload — see `citysim.results.pack.pack_frames`."""
     if not results_store.exists(job_id):
         raise HTTPException(404, "results not found")
     payload = results_store.load_job(job_id)
@@ -257,17 +231,11 @@ def run_frames(job_id: str, run: int) -> Response:
                                          "meta": sim.meta})
         cached = results_store.load_frames(job_id, run)
 
-    depth = np.clip(cached["depth"].astype(np.float32) * 1000.0, 0, 65535).astype("<u2")
-    nf, ny, nx = depth.shape
-    header = json.dumps({
-        "n_frames": int(nf), "ny": int(ny), "nx": int(nx),
-        "t": np.asarray(cached["t"]).round(1).tolist(),
-        "rain_mmh": np.asarray(cached["rain"]).round(2).tolist(),
-        "surcharging": cached["surcharging"],
-        "scenario": payload["scenarios"][run],
-        "run_summary": payload["runs"][run],
-    }).encode()
-    blob = struct.pack("<I", len(header)) + header + depth.tobytes()
+    blob = pack_frames(
+        depth=cached["depth"], t=cached["t"], rain_mmh=cached["rain"],
+        surcharging=cached["surcharging"],
+        scenario=payload["scenarios"][run], run_summary=payload["runs"][run],
+    )
     return Response(content=blob, media_type="application/octet-stream")
 
 

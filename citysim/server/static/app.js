@@ -11,7 +11,7 @@ const INK2 = "#c3c2b7", MUTED = "#898781", GRID = "#2c2c2a", BASE = "#383835",
 
 const state = {
   hazard: "flood", twin: null, jobId: null, results: null,
-  scene: null, viewer: null,
+  scene: null, viewer: null, preset: null, replayable: null,
   replay: { frames: null, header: null, idx: 0, playing: false, timer: null, run: null },
 };
 
@@ -25,11 +25,20 @@ function show(name) {
 }
 $("nav-setup").onclick = () => show("setup");
 $("nav-dash").onclick = () => show("dash");
-$("nav-viewer").onclick = () => show("viewer");
+/* entering the viewer from the nav has no run in hand — open the worst storm
+ * rather than presenting an empty scrubber */
+$("nav-viewer").onclick = () => state.replay.frames ? show("viewer") : openReplay(defaultRun());
+
+function defaultRun() {
+  const runs = [...state.results.run_index]
+    .filter(r => !state.replayable || state.replayable.includes(r.run))
+    .sort((a, b) => b.total_loss - a.total_loss);
+  return runs.length ? runs[0].run : 0;
+}
 
 /* ================= setup screen ================= */
 async function loadHazards() {
-  const hazards = await (await fetch("/api/hazards")).json();
+  const hazards = await API.hazards();
   const wrap = $("hazard-list");
   wrap.innerHTML = "";
   for (const h of hazards) {
@@ -52,37 +61,6 @@ function setProgress(frac, msg) {
   $("progress-msg").textContent = msg || "";
 }
 
-function watchJob(jobId, onProgress) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = job => {
-      if (settled) return;
-      settled = true;
-      job.status === "done" ? resolve(job) : reject(new Error(job.error || "job failed"));
-    };
-    const poll = async () => {
-      try {
-        const job = await (await fetch(`/api/jobs/${jobId}`)).json();
-        onProgress(job);
-        if (job.status === "done" || job.status === "error") return finish(job);
-      } catch (e) { /* transient; keep polling */ }
-      if (!settled) setTimeout(poll, 700);
-    };
-    // WebSocket for low-latency progress, polling as the safety net
-    try {
-      const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/jobs/${jobId}`);
-      ws.onmessage = ev => {
-        const job = JSON.parse(ev.data);
-        if (job.error && !job.status) return;
-        onProgress(job);
-        if (job.status === "done" || job.status === "error") { finish(job); ws.close(); }
-      };
-      ws.onerror = () => ws.close();
-    } catch (e) { /* fall through to polling */ }
-    poll();
-  });
-}
-
 $("btn-go").onclick = async () => {
   const btn = $("btn-go");
   btn.disabled = true;
@@ -90,13 +68,9 @@ $("btn-go").onclick = async () => {
   try {
     // 1. build the twin (Tier 2)
     setProgress(0.02, "building digital twin…");
-    const tw = await (await fetch("/api/twin", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ place: $("place").value, mode: $("mode").value }),
-    })).json();
-    const twinJob = await watchJob(tw.job_id, j =>
-      setProgress(0.02 + j.progress * 0.18, `twin: ${j.message}`));
-    state.twin = twinJob.result;
+    state.twin = await API.buildTwin(
+      { place: $("place").value, mode: $("mode").value },
+      (p, msg) => setProgress(0.02 + p * 0.18, `twin: ${msg}`));
     $("twin-summary").style.display = "block";
     $("twin-summary").innerHTML =
       `<b style="color:var(--ink)">${state.twin.name}</b> — ` +
@@ -110,21 +84,17 @@ $("btn-go").onclick = async () => {
     if ($("opt-valves").checked) options.backwater_valves = true;
     const cf = parseFloat($("opt-climate").value);
     if (cf !== 1.0) options.climate_factor = cf;
-    const sim = await (await fetch("/api/simulate", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        twin_id: state.twin.id, hazard: state.hazard,
-        n_runs: parseInt($("nruns").value), options,
-      }),
-    })).json();
-    state.jobId = sim.job_id;
-    await watchJob(sim.job_id, j =>
-      setProgress(0.2 + j.progress * 0.75, `ensemble: ${j.message}`));
+    state.jobId = await API.simulate({
+      twinId: state.twin.id, hazard: state.hazard,
+      nRuns: parseInt($("nruns").value), options, presetId: state.preset,
+    }, (p, msg) => setProgress(0.2 + p * 0.75, `ensemble: ${msg}`));
 
     // 3. fetch results + scene, hand off to dashboard & viewer
     setProgress(0.96, "loading results…");
-    state.results = await (await fetch(`/api/results/${state.jobId}`)).json();
-    state.scene = await (await fetch(`/api/twin/${state.twin.id}/scene`)).json();
+    state.results = await API.results(state.jobId);
+    state.scene = await API.scene(state.twin.id);
+    state.replayable = API.replayableRuns(state.jobId);
+    resetReplay();
     setProgress(1, "done");
     $("nav-dash").disabled = false;
     $("nav-viewer").disabled = false;
@@ -294,11 +264,16 @@ function mechanismChart(mount, counts) {
   mount.appendChild(svg);
 }
 
+/* a run is replayable when its frames can be produced: always, live; only for
+ * the runs baked at export time in static mode */
+const canReplay = run => !state.replayable || state.replayable.includes(run);
+
 function runPicker() {
   const reps = state.results.stats.representative_runs;
   const chips = $("rep-chips");
   chips.innerHTML = "";
   for (const [name, run] of Object.entries(reps)) {
+    if (!canReplay(run)) continue;
     const b = document.createElement("button");
     b.className = "rep-chip";
     b.textContent = `${name} run (#${run})`;
@@ -309,7 +284,8 @@ function runPicker() {
   $("runs-table").innerHTML =
     `<tr><th>storm</th><th>return period</th><th>rain</th><th>duration</th><th>total damage</th><th>$/household</th></tr>` +
     idx.map(r =>
-      `<tr class="clickable" data-run="${r.run}"><td>run #${r.run}</td><td>${r.return_period.toFixed(0)} yr</td>` +
+      `<tr class="${canReplay(r.run) ? "clickable" : ""}" data-run="${r.run}">` +
+      `<td>run #${r.run}</td><td>${r.return_period.toFixed(0)} yr</td>` +
       `<td>${r.total_mm.toFixed(0)} mm</td><td>${r.duration_h.toFixed(1)} h</td>` +
       `<td>${fmt$(r.total_loss)}</td><td>${fmt$(r.per_household_mean)}</td></tr>`).join("");
   $("runs-table").querySelectorAll("tr.clickable").forEach(tr =>
@@ -338,7 +314,9 @@ function initViewer() {
   // run selector
   const sel = $("run-select");
   sel.innerHTML = "";
-  const sorted = [...state.results.run_index].sort((a, b) => b.total_loss - a.total_loss);
+  const sorted = [...state.results.run_index]
+    .filter(r => canReplay(r.run))
+    .sort((a, b) => b.total_loss - a.total_loss);
   for (const r of sorted) {
     const o = document.createElement("option");
     o.value = r.run;
@@ -354,6 +332,13 @@ function applyColorMode() {
   state.viewer.recolorBuildings(mode, mode === "loss" ? state.results.building_mean_loss : null);
 }
 
+/* frames belong to one ensemble — drop them when a new one is loaded */
+function resetReplay() {
+  pause();
+  state.replay = { ...state.replay, frames: null, header: null, run: null, idx: 0 };
+  $("run-info").textContent = "No run loaded";
+}
+
 async function openReplay(run) {
   show("viewer");
   $("run-select").value = String(run);
@@ -361,7 +346,7 @@ async function openReplay(run) {
   pause();
   $("viewer-loading").classList.add("visible");
   try {
-    const buf = await (await fetch(`/api/results/${state.jobId}/runs/${run}/frames`)).arrayBuffer();
+    const buf = await API.frames(state.jobId, run);
     const dv = new DataView(buf);
     const hlen = dv.getUint32(0, true);
     const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, hlen)));
@@ -425,7 +410,7 @@ async function onBuildingPick(b) {
   panel.style.display = "block";
   panel.innerHTML = `<div class="panel"><h4>${b.use} · ${b.storeys} storey</h4>loading…</div>`;
   try {
-    const d = await (await fetch(`/api/results/${state.jobId}/buildings/${b.id}`)).json();
+    const d = await API.building(state.jobId, b.id);
     const spark = sparkHist(d.losses);
     panel.innerHTML = `<div class="panel">
       <h4>${cap(b.use)} — built ${b.year_built}</h4>
@@ -457,5 +442,51 @@ function sparkHist(values) {
     <line x1="0" x2="${W}" y1="${H}" y2="${H}" stroke="${BASE}" stroke-width="1"/></svg>`;
 }
 
+/* ================= static (prebaked) mode ================= */
+/* A static deployment has no solver behind it: the twin and a fixed set of
+ * scenario ensembles were computed at build time. The setup screen becomes a
+ * picker over those presets; everything downstream is unchanged. */
+function applyStaticMode(manifest) {
+  document.body.classList.add("static-mode");
+  $("btn-go").textContent = "Load scenario ensemble";
+  $("place").value = manifest.twin.name;
+  for (const el of [$("place"), $("mode"), $("nruns")]) el.disabled = true;
+  const opt = document.createElement("option");
+  opt.textContent = `${manifest.n_runs} (prebaked)`;
+  opt.selected = true;
+  $("nruns").appendChild(opt);
+  $("static-note").style.display = "block";
+  $("static-note").innerHTML =
+    `Prebaked demo — the ensembles below were simulated with the full Python ` +
+    `solver at build time (${manifest.generated_at.slice(0, 10)}) and shipped as ` +
+    `static data, so there is no server to wait on. ` +
+    `<a href="${manifest.repo_url}#running-it-yourself" target="_blank" rel="noopener">` +
+    `Run it locally</a> to build twins for other places and launch your own ensembles.`;
+
+  const wrap = $("preset-list");
+  wrap.innerHTML = "";
+  manifest.presets.forEach((p, i) => {
+    const b = document.createElement("button");
+    b.className = "preset-chip" + (i === 0 ? " selected" : "");
+    b.innerHTML = `<b>${p.label}</b><span>${p.description}</span>`;
+    b.onclick = () => {
+      state.preset = p.id;
+      wrap.querySelectorAll(".preset-chip").forEach(x => x.classList.remove("selected"));
+      b.classList.add("selected");
+    };
+    wrap.appendChild(b);
+  });
+  state.preset = manifest.presets[0].id;
+}
+
 /* ================= boot ================= */
-loadHazards();
+(async () => {
+  try {
+    const manifest = await API.init();
+    if (manifest) applyStaticMode(manifest);
+    await loadHazards();
+  } catch (e) {
+    $("error-msg").style.display = "block";
+    $("error-msg").textContent = `could not reach the CitySim backend: ${e.message || e}`;
+  }
+})();
