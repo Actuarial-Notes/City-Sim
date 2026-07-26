@@ -55,6 +55,13 @@ jobs:
       - name: Test
         run: python -m pytest -q
 
+      # Real Hamilton geometry from OpenStreetMap. The runner has open network
+      # access, so the deployed demo gets surveyed streets and footprints rather
+      # than the hand-digitized approximation committed for offline use. A fetch
+      # failure is not fatal — the fallback is a working twin.
+      - name: Fetch Hamilton geometry from OpenStreetMap
+        run: python scripts/bake_hamilton.py --allow-failure
+
       - name: Bake the ensembles (runs the flood solver)
         run: |
           python scripts/export_static.py \

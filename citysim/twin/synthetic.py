@@ -16,6 +16,7 @@ import hashlib
 
 import numpy as np
 
+from . import params as twin_params
 from .schema import (
     Building,
     LandCover,
@@ -30,18 +31,33 @@ from .schema import (
 # age + use when assessment data is unavailable). Loosely follows Ontario
 # housing-stock literature: pre-war stock skews masonry on rubble/block
 # basements; post-1980 skews wood-frame on poured concrete.
+#
+# The masonry shares are adjustable — see twin/params.py. This list holds the
+# era cutoffs and the param each era's share comes from.
 _ERA_MATERIAL = [
-    (1950, [("masonry", 0.65), ("wood_frame", 0.35)]),
-    (1980, [("masonry", 0.40), ("wood_frame", 0.60)]),
-    (9999, [("masonry", 0.20), ("wood_frame", 0.80)]),
+    (1950, "masonry_share_prewar"),
+    (1980, "masonry_share_midcentury"),
+    (9999, "masonry_share_modern"),
 ]
 
+# Retained for callers that want the defaults without resolving a param set.
 _REPLACEMENT_COST_PER_M2 = {   # CAD per m² of floor area, rough 2025 replacement costs
-    "residential": 2400.0,
-    "commercial": 2000.0,
-    "industrial": 1500.0,
-    "institutional": 2800.0,
+    "residential": twin_params.DEFAULTS["cost_residential"],
+    "commercial": twin_params.DEFAULTS["cost_commercial"],
+    "industrial": twin_params.DEFAULTS["cost_industrial"],
+    "institutional": twin_params.DEFAULTS["cost_institutional"],
 }
+
+
+def replacement_costs(p: dict) -> dict:
+    """Replacement cost per m² by use, with the construction cost index applied."""
+    idx = p["cost_index"]
+    return {
+        "residential": p["cost_residential"] * idx,
+        "commercial": p["cost_commercial"] * idx,
+        "industrial": p["cost_industrial"] * idx,
+        "institutional": p["cost_institutional"] * idx,
+    }
 
 
 def _smooth(a: np.ndarray, passes: int = 2) -> np.ndarray:
@@ -58,11 +74,23 @@ def _smooth(a: np.ndarray, passes: int = 2) -> np.ndarray:
 
 def generate_synthetic_twin(
     name: str = "Hamilton demo (lower city)",
-    nx: int = 150,
-    ny: int = 110,
-    cell_size: float = 6.0,
+    nx: int | None = None,
+    ny: int | None = None,
+    cell_size: float | None = None,
     seed: int | None = None,
+    params: dict | None = None,
 ) -> Twin:
+    """Build the procedural twin.
+
+    ``params`` is a twin-parameter override dict (see ``citysim.twin.params``);
+    it is resolved and clamped here, then folded into the twin id so two
+    parameter sets can never share a cache entry.
+    """
+    p = twin_params.resolve(params)
+    nx = int(p["nx"] if nx is None else nx)
+    ny = int(p["ny"] if ny is None else ny)
+    cell_size = float(p["cell_size"] if cell_size is None else cell_size)
+
     if seed is None:
         seed = int(hashlib.sha256(name.encode()).hexdigest()[:8], 16)
     rng = np.random.default_rng(seed)
@@ -74,12 +102,13 @@ def generate_synthetic_twin(
     X, Y = np.meshgrid(xs, ys)
     extent_y = ny * cell_size
 
-    base = 78.0                                     # lake-plain datum, m ASL
-    slope_to_bay = (extent_y - Y) * 0.006           # gentle fall to the north
-    escarpment = 35.0 / (1.0 + np.exp((Y - 0.12 * extent_y) / (0.035 * extent_y)))
+    base = p["base_elev"]                                # lake-plain datum, m ASL
+    slope_to_bay = (extent_y - Y) * p["slope_to_bay"]    # gentle fall to the north
+    escarpment = p["escarpment_height"] / (
+        1.0 + np.exp((Y - 0.12 * extent_y) / (0.035 * extent_y)))
     # A shallow buried-creek valley running north — the classic ponding corridor.
     valley_axis = 0.55 * nx * cell_size + 40.0 * np.sin(Y / extent_y * 2.5)
-    valley = -1.8 * np.exp(-((X - valley_axis) ** 2) / (2 * (55.0 ** 2)))
+    valley = -p["valley_depth"] * np.exp(-((X - valley_axis) ** 2) / (2 * (55.0 ** 2)))
     noise = _smooth(rng.normal(0.0, 0.45, (ny, nx)), passes=3)
     dtm = base + slope_to_bay + escarpment + valley + noise
     terrain = Terrain(dtm=dtm.astype(np.float64), cell_size=cell_size)
@@ -98,12 +127,24 @@ def generate_synthetic_twin(
         i0, i1 = int((sy - street_half) / cell_size), int((sy + street_half) / cell_size) + 1
         street_mask[max(i0, 0):min(i1, ny), :] = True
 
-    # The old combined-sewer core: the low-lying north-central district.
-    core_x = (X > 0.30 * nx * cell_size) & (X < 0.72 * nx * cell_size)
-    core_y = Y > 0.45 * extent_y
-    core_mask = core_x & core_y
+    # The old combined-sewer core: the low-lying north-central district. The
+    # extent scales about the district centre, so 0 gives a fully separated
+    # network and >1 pushes combined sewers out into the newer suburbs.
+    ext = p["combined_extent"]
+    cx0, cx1, cy0 = 0.30, 0.72, 0.45
+    mid_x = (cx0 + cx1) / 2
+    half_x = (cx1 - cx0) / 2 * ext
+    core_x = ((X > (mid_x - half_x) * nx * cell_size)
+              & (X < (mid_x + half_x) * nx * cell_size))
+    core_y = Y > (1.0 - (1.0 - cy0) * ext) * extent_y
+    core_mask = core_x & core_y if ext > 0 else np.zeros_like(X, dtype=bool)
 
     # ------------------------------------------------------------------ buildings
+    # storey weights are ratios, so normalise them into a probability vector
+    _sw = np.array([p["storey_weight_1"], p["storey_weight_2"], p["storey_weight_3"]],
+                   dtype=float)
+    storey_probs = _sw / _sw.sum()
+
     buildings: list[Building] = []
     bid = 0
     for gy in range(len(street_ys) - 1):
@@ -122,14 +163,15 @@ def generate_synthetic_twin(
             in_core = bool(core_mask[i_blk, j_blk])
 
             # a park block now and then
-            if rng.random() < 0.06:
+            if rng.random() < p["park_block_share"]:
                 continue
 
             block_use = "residential"
             r = rng.random()
-            if not in_core and r < 0.08:
+            ind_share = p["industrial_block_share"]
+            if not in_core and r < ind_share:
                 block_use = "industrial"
-            elif r < 0.16:
+            elif r < ind_share + p["commercial_block_share"]:
                 block_use = "commercial"
 
             if block_use == "residential":
@@ -148,12 +190,13 @@ def generate_synthetic_twin(
                               (lot_x0 + w, row_y + d), (lot_x0, row_y + d)]
                         cx, cy = lot_x0 + w / 2, row_y + d / 2
                         year = _sample_year(rng, in_core, cy / extent_y)
-                        material = _sample_material(rng, year)
-                        storeys = int(rng.choice([1, 2, 2, 3], p=[0.3, 0.3, 0.3, 0.1]))
-                        is_apartment = rng.random() < 0.05
+                        material = _sample_material(rng, year, p)
+                        storeys = int(rng.choice([1, 2, 3], p=storey_probs))
+                        is_apartment = rng.random() < p["apartment_share"]
                         if is_apartment:
                             storeys = int(rng.integers(3, 6))
-                        basement = rng.random() < (0.9 if year < 1990 else 0.75)
+                        basement = rng.random() < (p["basement_rate_pre1990"] if year < 1990
+                                                   else p["basement_rate_post1990"])
                         buildings.append(Building(
                             id=f"b{bid}",
                             footprint=fp,
@@ -164,9 +207,12 @@ def generate_synthetic_twin(
                             use="residential",
                             material=material,
                             foundation="basement" if basement else "slab",
-                            basement_depth=rng.uniform(1.8, 2.4) if basement else 0.0,
+                            basement_depth=rng.uniform(p["basement_depth_min"],
+                                                       p["basement_depth_max"])
+                            if basement else 0.0,
                             ground_elev=terrain.elevation_at(cx, cy),
-                            first_floor_height=rng.uniform(0.15, 0.6),
+                            first_floor_height=rng.uniform(p["first_floor_height_min"],
+                                                           p["first_floor_height_max"]),
                             dwelling_units=int(rng.integers(6, 20)) if is_apartment else 1,
                             structure_value=0.0,  # filled below
                         ))
@@ -199,20 +245,26 @@ def generate_synthetic_twin(
                     ))
                     bid += 1
 
-    # value assignment: floor area × replacement cost; contents ~ 35 % of structure
+    # value assignment: floor area × replacement cost; contents a ratio of structure
+    costs = replacement_costs(p)
+    disp = p["value_dispersion"]
     for b in buildings:
         area = _poly_area(b.footprint) * max(b.storeys, 1)
-        b.structure_value = round(area * _REPLACEMENT_COST_PER_M2[b.use]
-                                  * rng.uniform(0.85, 1.15), -2)
-        b.contents_value = round(b.structure_value * (0.35 if b.use == "residential" else 0.5), -2)
+        b.structure_value = round(area * costs[b.use]
+                                  * rng.uniform(1.0 - disp, 1.0 + disp), -2)
+        ratio = (p["contents_ratio_residential"] if b.use == "residential"
+                 else p["contents_ratio_other"])
+        b.contents_value = round(b.structure_value * ratio, -2)
 
     # ------------------------------------------------------------------ sewer network
-    sewer = _build_sewer(terrain, street_xs, street_ys, core_mask, cell_size, rng)
+    sewer = _build_sewer(terrain, street_xs, street_ys, core_mask, cell_size, rng, p)
 
     # ------------------------------------------------------------------ land cover
     landcover = _build_landcover(terrain, street_mask, buildings, rng)
 
-    twin_id = f"twin-{hashlib.sha256(f'{name}:{seed}'.encode()).hexdigest()[:10]}"
+    # non-default parameters change the twin, so they have to change its identity
+    fp = twin_params.fingerprint(p)
+    twin_id = f"twin-{hashlib.sha256(f'{name}:{seed}{fp}'.encode()).hexdigest()[:10]}"
     return Twin(
         id=twin_id,
         name=name,
@@ -221,6 +273,7 @@ def generate_synthetic_twin(
         buildings=buildings,
         sewer=sewer,
         landcover=landcover,
+        params=p,
         sources=["synthetic procedural generator (offline fallback; "
                  "see citysim.twin.connectors for live open-data sources)"],
     )
@@ -235,11 +288,13 @@ def _sample_year(rng: np.random.Generator, in_core: bool, y_frac: float) -> int:
     return int(rng.integers(1955, 2020))
 
 
-def _sample_material(rng: np.random.Generator, year: int) -> str:
-    for cutoff, dist in _ERA_MATERIAL:
+def _sample_material(rng: np.random.Generator, year: int, p: dict | None = None) -> str:
+    p = p or twin_params.DEFAULTS
+    for cutoff, share_key in _ERA_MATERIAL:
         if year < cutoff:
-            mats, probs = zip(*dist)
-            return str(rng.choice(mats, p=probs))
+            masonry = float(p.get(share_key, twin_params.DEFAULTS[share_key]))
+            return str(rng.choice(("masonry", "wood_frame"),
+                                  p=[masonry, 1.0 - masonry]))
     return "wood_frame"
 
 
@@ -249,11 +304,13 @@ def _poly_area(fp: list[tuple[float, float]]) -> float:
     return 0.5 * abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
 
 
-def _build_sewer(terrain, street_xs, street_ys, core_mask, cell_size, rng) -> SewerNetwork:
+def _build_sewer(terrain, street_xs, street_ys, core_mask, cell_size, rng,
+                 p: dict | None = None) -> SewerNetwork:
     """Manholes at intersections, pipes along streets, flow toward the bay
     (north). Hydraulic attributes are gap-filled the way the plan prescribes:
     slope from the DTM, diameter from upstream drainage area, invert from
     minimum-cover standards."""
+    p = p or twin_params.DEFAULTS
     nodes: list[SewerNode] = []
     conduits: list[SewerConduit] = []
     ny, nx = terrain.shape
@@ -268,10 +325,11 @@ def _build_sewer(terrain, street_xs, street_ys, core_mask, cell_size, rng) -> Se
             rim = terrain.elevation_at(sx, sy)
             nodes.append(SewerNode(
                 id=node_id, x=sx, y=sy, kind="manhole", system=system,
-                rim_elev=rim, invert_elev=rim - 2.6,
+                rim_elev=rim, invert_elev=rim - p["invert_depth"],
                 # one model node stands in for the several street inlets that
                 # drain to it, so grate capacity is a multiple of a single CB
-                max_inflow=rng.uniform(0.12, 0.22),
+                max_inflow=rng.uniform(p["catchbasin_capacity_min"],
+                                       p["catchbasin_capacity_max"]),
             ))
             grid_ids[(gx, gy)] = node_id
 
@@ -284,10 +342,11 @@ def _build_sewer(terrain, street_xs, street_ys, core_mask, cell_size, rng) -> Se
     upstream_count: dict[str, int] = {n.id: 1 for n in nodes}
 
     cid = 0
+    min_slope = p["min_design_slope"]
     for gx in range(n_cols):
         for gy in range(n_rows - 1):
             a, b = grid_ids[(gx, gy)], grid_ids[(gx, gy + 1)]
-            conduits.append(_make_conduit(f"c{cid}", node_map[a], node_map[b], rng))
+            conduits.append(_make_conduit(f"c{cid}", node_map[a], node_map[b], rng, min_slope))
             upstream_count[b] += upstream_count[a]
             cid += 1
     # east-west collectors on every second row, draining toward centre column
@@ -298,13 +357,14 @@ def _build_sewer(terrain, street_xs, street_ys, core_mask, cell_size, rng) -> Se
                 a, b = grid_ids[(gx, gy)], grid_ids[(gx + 1, gy)]
             else:
                 a, b = grid_ids[(gx + 1, gy)], grid_ids[(gx, gy)]
-            conduits.append(_make_conduit(f"c{cid}", node_map[a], node_map[b], rng))
+            conduits.append(_make_conduit(f"c{cid}", node_map[a], node_map[b], rng, min_slope))
             cid += 1
 
     # size pipes from upstream count (proxy for drained area) — design-table style
+    dia_scale = p["pipe_diameter_scale"]
     for c in conduits:
         n_up = upstream_count.get(c.from_node, 1)
-        c.diameter = float(np.clip(0.25 + 0.16 * np.sqrt(n_up), 0.25, 1.8))
+        c.diameter = float(np.clip(0.25 + 0.16 * np.sqrt(n_up), 0.25, 1.8) * dia_scale)
 
     # outfall at the north end of the centre (valley) column
     out_node = node_map[grid_ids[(centre, n_rows - 1)]]
@@ -316,16 +376,17 @@ def _build_sewer(terrain, street_xs, street_ys, core_mask, cell_size, rng) -> Se
     nodes.append(outfall)
     conduits.append(SewerConduit(
         id=f"c{cid}", from_node=out_node.id, to_node="outfall",
-        diameter=1.8, length=40.0, slope=0.004, system=out_node.system,
+        diameter=1.8 * dia_scale, length=40.0, slope=0.004, system=out_node.system,
     ))
 
     return SewerNetwork(nodes=nodes, conduits=conduits)
 
 
-def _make_conduit(cid: str, a: SewerNode, b: SewerNode, rng) -> SewerConduit:
+def _make_conduit(cid: str, a: SewerNode, b: SewerNode, rng,
+                  min_slope: float = 0.0015) -> SewerConduit:
     length = float(np.hypot(a.x - b.x, a.y - b.y))
     ground_slope = (a.rim_elev - b.rim_elev) / max(length, 1.0)
-    slope = float(max(ground_slope, 0.0015))          # min design slope
+    slope = float(max(ground_slope, min_slope))       # min design slope
     system = a.system if a.system == b.system else "combined"
     return SewerConduit(
         id=cid, from_node=a.id, to_node=b.id,
@@ -350,10 +411,23 @@ def _build_landcover(terrain, street_mask, buildings, rng) -> LandCover:
         i0, i1 = int(min(ys_) / cell), int(np.ceil(max(ys_) / cell))
         classes[max(i0, 0):min(i1, ny), max(j0, 0):min(j1, nx)] = 2
 
-    manning = np.choose(classes, [0.03, 0.013, 0.02, 0.05, 0.10, 0.035]).astype(np.float32)
-    imperv = np.choose(classes, [1.0, 0.95, 0.98, 0.05, 0.02, 0.15]).astype(np.float32)
+    return landcover_from_classes(classes)
+
+
+def landcover_from_classes(classes: np.ndarray) -> LandCover:
+    """Derive the hydrology grids from land-cover class codes.
+
+    The lookup tables live in ``flood.assumptions`` and are shared by every
+    twin-building path. They used to be duplicated here and in ``builder.py``,
+    where the two copies could silently diverge and give the synthetic and
+    OSM-hybrid twins different hydrology.
+    """
+    from citysim.hazards.flood import assumptions as fa
+
+    manning = np.choose(classes, fa.LANDCOVER_MANNING).astype(np.float32)
+    imperv = np.choose(classes, fa.LANDCOVER_IMPERVIOUSNESS).astype(np.float32)
     # Hamilton lowland soils are clay-heavy: modest infiltration capacity.
-    infil = np.choose(classes, [0.0, 0.5, 0.0, 9.0, 14.0, 6.0]).astype(np.float32)
+    infil = np.choose(classes, fa.LANDCOVER_INFILTRATION).astype(np.float32)
 
     return LandCover(classes=classes, manning_n=manning,
                      imperviousness=imperv, infiltration=infil)

@@ -51,6 +51,8 @@ class TwinStore:
             "region": twin.region,
             "version": twin.version,
             "sources": twin.sources,
+            "params": twin.params,
+            "features": twin.features,
             "cell_size": twin.terrain.cell_size,
             "origin": list(twin.terrain.origin),
             "buildings": [asdict(b) for b in twin.buildings],
@@ -88,6 +90,8 @@ class TwinStore:
             id=meta["id"], name=meta["name"], region=meta["region"],
             terrain=terrain, buildings=buildings, sewer=sewer,
             landcover=landcover, version=meta["version"], sources=meta["sources"],
+            # twins stored before V2 have neither key
+            params=meta.get("params", {}), features=meta.get("features", {}),
         )
 
     def list(self) -> list[dict]:

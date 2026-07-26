@@ -54,6 +54,12 @@ class LiveBackend {
 
   hazards() { return getJSON("/api/hazards"); }
 
+  /* The assumption and twin-parameter specs drive the whole Setup screen, so
+   * declaring a knob in Python is all it takes to surface it in the UI. */
+  assumptions(hazard) { return getJSON(`/api/hazards/${hazard}/assumptions`); }
+  twinParams() { return getJSON("/api/twin/params"); }
+  resolvedAssumptions(jobId) { return getJSON(`/api/results/${jobId}/assumptions`); }
+
   /* Progress for both job types comes over a WebSocket, with polling as the
    * safety net (proxies that drop WS, sleeping tabs). */
   _watchJob(jobId, onProgress) {
@@ -96,15 +102,15 @@ class LiveBackend {
     return res.json();
   }
 
-  async buildTwin({ place, mode }, onProgress) {
-    const { job_id } = await this._post("/api/twin", { place, mode });
+  async buildTwin({ place, mode, params }, onProgress) {
+    const { job_id } = await this._post("/api/twin", { place, mode, params: params || {} });
     const job = await this._watchJob(job_id, j => onProgress(j.progress, j.message));
     return job.result;
   }
 
-  async simulate({ twinId, hazard, nRuns, options }, onProgress) {
+  async simulate({ twinId, hazard, nRuns, seed, options }, onProgress) {
     const { job_id } = await this._post("/api/simulate", {
-      twin_id: twinId, hazard, n_runs: nRuns, options,
+      twin_id: twinId, hazard, n_runs: nRuns, seed: seed || 1234, options,
     });
     await this._watchJob(job_id, j => onProgress(j.progress, j.message));
     return job_id;
@@ -137,6 +143,18 @@ class StaticBackend {
 
   async hazards() { return this.manifest.hazards; }
 
+  /* Baked alongside the results by scripts/export_static.py, so the Setup tabs
+   * render identically on the prebaked deploy — every curve, table and citation
+   * present, every input disabled. */
+  assumptions() { return getJSON(`${this.root}assumptions.json`); }
+  twinParams() { return getJSON(`${this.root}twin_params.json`); }
+
+  async resolvedAssumptions(presetId) {
+    const preset = this.manifest.presets.find(p => p.id === presetId)
+      || this.manifest.presets[0];
+    return getJSON(`${this.root}${preset.id}/assumptions.json`);
+  }
+
   /* The twin was built at export time; replay the staged messages so the
    * pipeline reads the same way it does live. */
   async buildTwin(_req, onProgress) {
@@ -146,8 +164,9 @@ class StaticBackend {
     return this.manifest.twin;
   }
 
-  /* `options` is ignored — the setup screen offers baked presets in static
-   * mode, and passes the chosen preset id through. */
+  /* `options` is ignored — a prebaked deployment has no solver to re-run, so
+   * the setup screen offers baked presets and passes the chosen preset id
+   * through instead. */
   async simulate({ presetId }, onProgress) {
     const preset = this.manifest.presets.find(p => p.id === presetId)
       || this.manifest.presets[0];

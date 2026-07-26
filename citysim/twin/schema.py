@@ -124,10 +124,60 @@ class Twin:
     landcover: LandCover
     version: int = 1
     sources: list[str] = field(default_factory=list)   # data-source provenance strings
+    # resolved twin-generation parameters (citysim.twin.params) — recorded so
+    # the UI can show what this twin was actually built from, not just what was
+    # requested
+    params: dict = field(default_factory=dict)
+    # optional real-world geometry (streets, water, parks, landmarks) when the
+    # twin was built from a baked extract rather than generated
+    features: dict = field(default_factory=dict)
 
     @property
     def n_households(self) -> int:
         return sum(b.dwelling_units for b in self.buildings if b.use == "residential")
+
+    def exposure(self) -> dict:
+        """Total value at risk, by use — what the economics tab reports back."""
+        by_use: dict[str, dict] = {}
+        for b in self.buildings:
+            e = by_use.setdefault(b.use, {"count": 0, "structure": 0.0, "contents": 0.0})
+            e["count"] += 1
+            e["structure"] += b.structure_value
+            e["contents"] += b.contents_value
+        for e in by_use.values():
+            e["structure"] = round(e["structure"], 2)
+            e["contents"] = round(e["contents"], 2)
+        return by_use
+
+    def stock_profile(self) -> dict:
+        """Distributions of the building stock — what the Setup histograms plot.
+
+        Computed from the twin itself rather than from the parameters, so the
+        Setup screen shows what was actually generated instead of what was asked
+        for. The two differ whenever a knob interacts with the geometry.
+        """
+        decades: dict[str, int] = {}
+        materials: dict[str, int] = {}
+        storeys: dict[str, int] = {}
+        uses: dict[str, int] = {}
+        basements = 0
+        for b in self.buildings:
+            decades[str(b.year_built // 10 * 10)] = decades.get(str(b.year_built // 10 * 10), 0) + 1
+            materials[b.material] = materials.get(b.material, 0) + 1
+            storeys[str(b.storeys)] = storeys.get(str(b.storeys), 0) + 1
+            uses[b.use] = uses.get(b.use, 0) + 1
+            if b.has_basement:
+                basements += 1
+        n = max(len(self.buildings), 1)
+        return {
+            "decades": dict(sorted(decades.items())),
+            "materials": materials,
+            "storeys": dict(sorted(storeys.items(), key=lambda kv: int(kv[0]))),
+            "uses": uses,
+            "basement_share": round(basements / n, 3),
+            "median_year": int(sorted(b.year_built for b in self.buildings)[len(self.buildings) // 2])
+            if self.buildings else 0,
+        }
 
     def summary(self) -> dict:
         ny, nx = self.terrain.shape
@@ -142,6 +192,12 @@ class Twin:
             "sewer_nodes": len(self.sewer.nodes),
             "sewer_conduits": len(self.sewer.conduits),
             "combined_sewer_nodes": sum(1 for n in self.sewer.nodes if n.system == "combined"),
+            "elevation_range": [round(float(self.terrain.dtm.min()), 1),
+                                round(float(self.terrain.dtm.max()), 1)],
+            "exposure": self.exposure(),
+            "stock": self.stock_profile(),
+            "params": self.params,
+            "mode": (self.region or {}).get("mode", "synthetic"),
             "sources": self.sources,
         }
 

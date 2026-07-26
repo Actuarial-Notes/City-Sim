@@ -2,7 +2,11 @@ __pycache__/
 *.pyc
 *.egg-info/
 .pytest_cache/
-data/
+# the runtime twin/results store at the repo root — anchored, so it does not
+# also swallow citysim/twin/data/, which is shipped source
+/data/
 .venv/
 # static export output (built by CI, never committed)
 site/
+# setuptools build tree (was committed by accident; never edit citysim/ via build/)
+build/
